@@ -13,17 +13,27 @@ import (
 	"sync"
 	"time"
 
+	"github.com/StopDragon/sword-macro-ai/internal/logger"
 	"github.com/google/uuid"
 )
 
 const (
-	endpoint     = "https://sword-ai.stopdragon.kr/api/telemetry"
-	stateFile    = ".telemetry_state.json"
-	schemaVer    = 2 // v2: 검 종류별 통계, 히든 이름별 통계, 세션 통계 추가
-	sendTimeout  = 5 * time.Second
-	sendInterval = 5 * time.Minute
-	appSecret    = "sw0rd-m4cr0-2026-s3cr3t-k3y"
+	endpoint         = "https://sword-ai.stopdragon.kr/api/telemetry"
+	stateFile        = ".telemetry_state.json"
+	schemaVer        = 2 // v2: 검 종류별 통계, 히든 이름별 통계, 세션 통계 추가
+	sendTimeout      = 5 * time.Second
+	sendInterval     = 5 * time.Minute
+	defaultAppSecret = "sw0rd-m4cr0-2026-s3cr3t-k3y" // 환경변수 없을 때 기본값
+	appSecretEnvVar  = "SWORD_APP_SECRET"
 )
+
+// getAppSecret 앱 시크릿 조회 (환경변수 우선)
+func getAppSecret() string {
+	if secret := os.Getenv(appSecretEnvVar); secret != "" {
+		return secret
+	}
+	return defaultAppSecret
+}
 
 // SwordBattleStat 검 종류별 배틀 통계
 type SwordBattleStat struct {
@@ -488,24 +498,26 @@ func (t *Telemetry) RecordGoldChange(currentGold int) {
 // TrySend 5분 간격으로 서버에 전송 시도
 func (t *Telemetry) TrySend() {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	if !t.enabled {
+		t.mu.Unlock()
 		return
 	}
 
 	// 5분 경과 확인
 	if time.Since(t.lastSentTime) < sendInterval {
+		t.mu.Unlock()
 		return
 	}
 
 	// 전송할 데이터가 없으면 스킵
 	if t.stats.TotalCycles == 0 && t.stats.TotalSwordsFound == 0 &&
 		t.stats.BattleCount == 0 && t.stats.SalesCount == 0 && t.stats.FarmingAttempts == 0 {
+		t.mu.Unlock()
 		return
 	}
 
-	// 전송할 데이터 준비
+	// 전송할 데이터 준비 (복사본 생성 - 레이스 컨디션 방지)
 	t.stats.SessionDuration = int(time.Since(t.sessionStart).Seconds())
 	period := time.Now().Format("2006-01-02")
 
@@ -515,35 +527,89 @@ func (t *Telemetry) TrySend() {
 		OSType:        runtime.GOOS,
 		SessionID:     t.sessionID,
 		Period:        period,
-		Stats:         t.stats,
+		Stats:         t.copyStats(), // 복사본 사용
 	}
 
 	// 서명 생성
 	signature := generateSignature(t.sessionID, period)
 
-	// 비동기 전송 (메인 스레드 블로킹 방지)
-	go t.send(payload, signature)
-
-	// 마지막 전송 시간 업데이트
+	// 마지막 전송 시간 업데이트 (lock 내에서)
 	t.lastSentTime = time.Now()
+
+	// 통계 리셋 (비동기 전송 전에 리셋하여 중복 전송 방지)
+	t.stats = Stats{}
+	t.saveState()
+	t.mu.Unlock()
+
+	// 비동기 전송 (메인 스레드 블로킹 방지)
+	go t.sendAsync(payload, signature)
 }
 
-// generateSignature 서명 생성
-func generateSignature(sessionID, period string) string {
-	h := sha256.Sum256([]byte(sessionID + period + appSecret))
-	return hex.EncodeToString(h[:])[:16]
+// copyStats 통계 복사본 생성 (맵 deep copy)
+func (t *Telemetry) copyStats() Stats {
+	copied := t.stats
+
+	// 맵 deep copy
+	if t.stats.EnhanceByLevel != nil {
+		copied.EnhanceByLevel = make(map[int]int)
+		for k, v := range t.stats.EnhanceByLevel {
+			copied.EnhanceByLevel[k] = v
+		}
+	}
+	if t.stats.SwordBattleStats != nil {
+		copied.SwordBattleStats = make(map[string]*SwordBattleStat)
+		for k, v := range t.stats.SwordBattleStats {
+			vc := *v
+			copied.SwordBattleStats[k] = &vc
+		}
+	}
+	if t.stats.HiddenFoundByName != nil {
+		copied.HiddenFoundByName = make(map[string]int)
+		for k, v := range t.stats.HiddenFoundByName {
+			copied.HiddenFoundByName[k] = v
+		}
+	}
+	if t.stats.ItemFarmingStats != nil {
+		copied.ItemFarmingStats = make(map[string]*ItemFarmingStat)
+		for k, v := range t.stats.ItemFarmingStats {
+			vc := *v
+			copied.ItemFarmingStats[k] = &vc
+		}
+	}
+	if t.stats.UpsetStatsByDiff != nil {
+		copied.UpsetStatsByDiff = make(map[int]*UpsetStat)
+		for k, v := range t.stats.UpsetStatsByDiff {
+			vc := *v
+			copied.UpsetStatsByDiff[k] = &vc
+		}
+	}
+	if t.stats.SwordSaleStats != nil {
+		copied.SwordSaleStats = make(map[string]*SwordSaleStat)
+		for k, v := range t.stats.SwordSaleStats {
+			vc := *v
+			copied.SwordSaleStats[k] = &vc
+		}
+	}
+	if t.stats.Session != nil {
+		sc := *t.stats.Session
+		copied.Session = &sc
+	}
+
+	return copied
 }
 
-// send HTTP 전송
-func (t *Telemetry) send(payload Payload, signature string) {
+// sendAsync 비동기 전송 (복사된 payload 사용)
+func (t *Telemetry) sendAsync(payload Payload, signature string) {
 	data, err := json.Marshal(payload)
 	if err != nil {
+		logger.Error("[텔레메트리] JSON 직렬화 실패: %v", err)
 		return
 	}
 
 	client := &http.Client{Timeout: sendTimeout}
 	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(data))
 	if err != nil {
+		logger.Error("[텔레메트리] 요청 생성 실패: %v", err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -551,6 +617,44 @@ func (t *Telemetry) send(payload Payload, signature string) {
 
 	resp, err := client.Do(req)
 	if err != nil {
+		logger.Debug("[텔레메트리] 전송 실패: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		logger.Debug("[텔레메트리] 전송 성공")
+	} else {
+		logger.Debug("[텔레메트리] 서버 응답 오류: %d", resp.StatusCode)
+	}
+}
+
+// generateSignature 서명 생성
+func generateSignature(sessionID, period string) string {
+	h := sha256.Sum256([]byte(sessionID + period + getAppSecret()))
+	return hex.EncodeToString(h[:])[:16]
+}
+
+// send HTTP 전송 (에러 로깅 포함)
+func (t *Telemetry) send(payload Payload, signature string) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		logger.Error("[텔레메트리] JSON 직렬화 실패: %v", err)
+		return
+	}
+
+	client := &http.Client{Timeout: sendTimeout}
+	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(data))
+	if err != nil {
+		logger.Error("[텔레메트리] 요청 생성 실패: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-App-Signature", signature)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		logger.Debug("[텔레메트리] 전송 실패: %v", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -561,6 +665,9 @@ func (t *Telemetry) send(payload Payload, signature string) {
 		t.stats = Stats{} // 통계 리셋
 		t.saveState()
 		t.mu.Unlock()
+		logger.Debug("[텔레메트리] 전송 성공")
+	} else {
+		logger.Debug("[텔레메트리] 서버 응답 오류: %d", resp.StatusCode)
 	}
 }
 

@@ -6,6 +6,14 @@ import (
 	"strings"
 )
 
+// 검증 상수
+const (
+	MinLevel = 0
+	MaxLevel = 20 // 게임 내 최대 레벨
+	MinGold  = 0
+	MaxGold  = 1000000000 // 10억 (합리적 최대값)
+)
+
 // GameState 게임 상태
 type GameState struct {
 	Level      int
@@ -81,7 +89,7 @@ var (
 	battleVsPattern     = regexp.MustCompile(`(@\S+)\s*『\[([^\]]+)\]`)
 )
 
-// ParseOCRText OCR 텍스트 파싱
+// ParseOCRText OCR 텍스트 파싱 (범위 검증 포함)
 func ParseOCRText(text string) *GameState {
 	state := &GameState{
 		Level:    -1,
@@ -98,18 +106,22 @@ func ParseOCRText(text string) *GameState {
 			continue
 		}
 
-		// 레벨 파싱
+		// 레벨 파싱 (범위 검증 포함)
 		if matches := levelPattern.FindStringSubmatch(line); len(matches) > 1 {
 			if level, err := strconv.Atoi(matches[1]); err == nil {
-				state.Level = level
+				if ValidateLevel(level) {
+					state.Level = level
+				}
 			}
 		}
 
-		// 골드 파싱
+		// 골드 파싱 (범위 검증 포함)
 		if matches := goldPattern.FindStringSubmatch(line); len(matches) > 1 {
 			goldStr := strings.ReplaceAll(matches[1], ",", "")
 			if gold, err := strconv.Atoi(goldStr); err == nil {
-				state.Gold = gold
+				if ValidateGold(gold) {
+					state.Gold = gold
+				}
 			}
 		}
 
@@ -173,25 +185,41 @@ func DetectItemType(text string) string {
 	return "unknown"
 }
 
-// ExtractLevel 레벨 추출
+// ExtractLevel 레벨 추출 (범위 검증 포함)
 func ExtractLevel(text string) int {
 	if matches := levelPattern.FindStringSubmatch(text); len(matches) > 1 {
 		if level, err := strconv.Atoi(matches[1]); err == nil {
-			return level
+			// 범위 검증
+			if level >= MinLevel && level <= MaxLevel {
+				return level
+			}
 		}
 	}
 	return -1
 }
 
-// ExtractGold 골드 추출
+// ExtractGold 골드 추출 (범위 검증 포함)
 func ExtractGold(text string) int {
 	if matches := goldPattern.FindStringSubmatch(text); len(matches) > 1 {
 		goldStr := strings.ReplaceAll(matches[1], ",", "")
 		if gold, err := strconv.Atoi(goldStr); err == nil {
-			return gold
+			// 범위 검증
+			if gold >= MinGold && gold <= MaxGold {
+				return gold
+			}
 		}
 	}
 	return -1
+}
+
+// ValidateLevel 레벨 범위 검증
+func ValidateLevel(level int) bool {
+	return level >= MinLevel && level <= MaxLevel
+}
+
+// ValidateGold 골드 범위 검증
+func ValidateGold(gold int) bool {
+	return gold >= MinGold && gold <= MaxGold
 }
 
 // ParseProfile 프로필 파싱

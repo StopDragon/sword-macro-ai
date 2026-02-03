@@ -13,8 +13,80 @@ import (
 )
 
 const (
-	appSecret = "sw0rd-m4cr0-2026-s3cr3t-k3y"
+	defaultAppSecret = "sw0rd-m4cr0-2026-s3cr3t-k3y" // 환경변수 없을 때 기본값
+	appSecretEnvVar  = "SWORD_APP_SECRET"
+
+	// 입력 검증 상수
+	maxSessionIDLen  = 100
+	maxAppVersionLen = 50
+	maxOSTypeLen     = 20
+	maxPeriodLen     = 20
+	maxSwordNameLen  = 50
+	maxMapEntries    = 1000    // 맵 최대 항목 수
+	maxStatValue     = 1000000 // 단일 통계 최대값
+
+	// Rate Limiting
+	rateLimitWindow  = time.Minute
+	rateLimitMax     = 60 // 분당 최대 요청
 )
+
+// getAppSecret 앱 시크릿 조회 (환경변수 우선)
+func getAppSecret() string {
+	if secret := os.Getenv(appSecretEnvVar); secret != "" {
+		return secret
+	}
+	return defaultAppSecret
+}
+
+// Rate Limiter
+type rateLimiter struct {
+	mu       sync.Mutex
+	requests map[string][]time.Time
+}
+
+var limiter = &rateLimiter{
+	requests: make(map[string][]time.Time),
+}
+
+// isRateLimited IP 기반 Rate Limit 체크
+func (rl *rateLimiter) isRateLimited(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	windowStart := now.Add(-rateLimitWindow)
+
+	// 기존 요청 필터링 (윈도우 내의 것만 유지)
+	var validRequests []time.Time
+	for _, t := range rl.requests[ip] {
+		if t.After(windowStart) {
+			validRequests = append(validRequests, t)
+		}
+	}
+	rl.requests[ip] = validRequests
+
+	// Rate limit 체크
+	if len(validRequests) >= rateLimitMax {
+		return true
+	}
+
+	// 새 요청 기록
+	rl.requests[ip] = append(rl.requests[ip], now)
+	return false
+}
+
+// getClientIP 클라이언트 IP 추출
+func getClientIP(r *http.Request) string {
+	// X-Forwarded-For 헤더 우선
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return xff
+	}
+	// X-Real-IP 헤더
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	return r.RemoteAddr
+}
 
 // ========================
 // 게임 데이터 구조체
@@ -241,6 +313,13 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Rate Limiting
+	clientIP := getClientIP(r)
+	if limiter.isRateLimited(clientIP) {
+		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
 	// 서명 검증
 	signature := r.Header.Get("X-App-Signature")
 	if signature == "" {
@@ -251,6 +330,13 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 	var payload TelemetryPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	// 입력 검증
+	if err := validateTelemetryPayload(&payload); err != nil {
+		log.Printf("[텔레메트리] 검증 실패: %v (IP=%s)", err, clientIP)
+		http.Error(w, "Invalid payload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -579,8 +665,121 @@ func handleItemStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func generateSignature(sessionID, period string) string {
-	h := sha256.Sum256([]byte(sessionID + period + appSecret))
+	h := sha256.Sum256([]byte(sessionID + period + getAppSecret()))
 	return hex.EncodeToString(h[:])[:16]
+}
+
+// validateTelemetryPayload 텔레메트리 페이로드 검증
+func validateTelemetryPayload(p *TelemetryPayload) error {
+	// 필수 필드 검증
+	if p.SessionID == "" {
+		return fmt.Errorf("session_id is required")
+	}
+	if len(p.SessionID) > maxSessionIDLen {
+		return fmt.Errorf("session_id too long")
+	}
+	if len(p.AppVersion) > maxAppVersionLen {
+		return fmt.Errorf("app_version too long")
+	}
+	if len(p.OSType) > maxOSTypeLen {
+		return fmt.Errorf("os_type too long")
+	}
+	if len(p.Period) > maxPeriodLen {
+		return fmt.Errorf("period too long")
+	}
+
+	// 스키마 버전 검증
+	if p.SchemaVersion < 1 || p.SchemaVersion > 10 {
+		return fmt.Errorf("invalid schema_version")
+	}
+
+	// 통계 값 범위 검증
+	if err := validateStatValues(&p.Stats); err != nil {
+		return err
+	}
+
+	// 맵 크기 검증
+	if len(p.Stats.EnhanceByLevel) > maxMapEntries {
+		return fmt.Errorf("enhance_by_level too many entries")
+	}
+	if len(p.Stats.SwordBattleStats) > maxMapEntries {
+		return fmt.Errorf("sword_battle_stats too many entries")
+	}
+	if len(p.Stats.HiddenFoundByName) > maxMapEntries {
+		return fmt.Errorf("hidden_found_by_name too many entries")
+	}
+	if len(p.Stats.UpsetStatsByDiff) > maxMapEntries {
+		return fmt.Errorf("upset_stats_by_diff too many entries")
+	}
+	if len(p.Stats.SwordSaleStats) > maxMapEntries {
+		return fmt.Errorf("sword_sale_stats too many entries")
+	}
+	if len(p.Stats.ItemFarmingStats) > maxMapEntries {
+		return fmt.Errorf("item_farming_stats too many entries")
+	}
+
+	// 맵 키 길이 검증
+	for name := range p.Stats.SwordBattleStats {
+		if len(name) > maxSwordNameLen {
+			return fmt.Errorf("sword name too long: %s", name)
+		}
+	}
+	for name := range p.Stats.HiddenFoundByName {
+		if len(name) > maxSwordNameLen {
+			return fmt.Errorf("hidden name too long: %s", name)
+		}
+	}
+	for name := range p.Stats.ItemFarmingStats {
+		if len(name) > maxSwordNameLen {
+			return fmt.Errorf("item name too long: %s", name)
+		}
+	}
+
+	return nil
+}
+
+// validateStatValues 통계 값 범위 검증 (음수 및 과도하게 큰 값 방지)
+func validateStatValues(s *TelemetryStats) error {
+	// 음수 검증
+	if s.TotalCycles < 0 || s.SuccessfulCycles < 0 || s.FailedCycles < 0 {
+		return fmt.Errorf("negative cycle values")
+	}
+	if s.TotalGoldMined < 0 || s.BattleGoldEarned < 0 {
+		return fmt.Errorf("negative gold values")
+	}
+	if s.EnhanceAttempts < 0 || s.BattleCount < 0 || s.FarmingAttempts < 0 {
+		return fmt.Errorf("negative attempt values")
+	}
+
+	// 최대값 검증
+	if s.TotalCycles > maxStatValue || s.EnhanceAttempts > maxStatValue {
+		return fmt.Errorf("stat value too large")
+	}
+	if s.BattleCount > maxStatValue || s.FarmingAttempts > maxStatValue {
+		return fmt.Errorf("stat value too large")
+	}
+
+	// 레벨 범위 검증 (EnhanceByLevel)
+	for level, count := range s.EnhanceByLevel {
+		if level < 0 || level > 20 {
+			return fmt.Errorf("invalid enhance level: %d", level)
+		}
+		if count < 0 || count > maxStatValue {
+			return fmt.Errorf("invalid enhance count for level %d", level)
+		}
+	}
+
+	// 역배 레벨차 검증
+	for diff, stat := range s.UpsetStatsByDiff {
+		if diff < 1 || diff > 10 {
+			return fmt.Errorf("invalid upset level diff: %d", diff)
+		}
+		if stat != nil && (stat.Attempts < 0 || stat.Wins < 0 || stat.GoldEarned < 0) {
+			return fmt.Errorf("negative upset stats for diff %d", diff)
+		}
+	}
+
+	return nil
 }
 
 func main() {

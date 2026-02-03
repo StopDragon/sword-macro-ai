@@ -766,34 +766,80 @@ func (e *Engine) showSettings(reader *bufio.Reader) {
 func (e *Engine) showMyProfile() {
 	fmt.Println()
 	fmt.Println("=== 내 프로필 분석 ===")
-	fmt.Println("카카오톡에서 /프로필을 입력하고")
-	fmt.Println("메시지 입력창에 마우스를 올려놓으세요...")
-	fmt.Println("3초 후 프로필을 읽습니다.")
 
 	// 좌표 설정
 	if !e.cfg.LockXY || e.cfg.ClickX == 0 {
-		time.Sleep(3 * time.Second)
+		fmt.Println("카카오톡 메시지 입력창에 마우스를 올려놓으세요...")
+		fmt.Println("3초 후 좌표를 저장합니다.")
+		for i := 3; i > 0; i-- {
+			fmt.Printf("\r%d...", i)
+			time.Sleep(1 * time.Second)
+		}
+		fmt.Println()
 		e.cfg.ClickX, e.cfg.ClickY = input.GetMousePos()
 		e.cfg.Save()
+		fmt.Printf("✅ 좌표 저장됨: (%d, %d)\n", e.cfg.ClickX, e.cfg.ClickY)
+	} else {
+		fmt.Printf("📍 저장된 좌표 사용: (%d, %d)\n", e.cfg.ClickX, e.cfg.ClickY)
 	}
 
+	// OCR 캡처 영역 표시
+	captureX := e.cfg.ClickX - e.cfg.CaptureW/2
+	captureY := e.cfg.ClickY - e.cfg.InputBoxH/2 - e.cfg.CaptureH
+	fmt.Println()
+	fmt.Println("📸 OCR 캡처 영역:")
+	fmt.Printf("   위치: (%d, %d)\n", captureX, captureY)
+	fmt.Printf("   크기: %d x %d\n", e.cfg.CaptureW, e.cfg.CaptureH)
+	fmt.Println()
+
 	// OCR 초기화
+	fmt.Println("🔧 OCR 엔진 초기화 중...")
 	if err := ocr.Init(); err != nil {
 		fmt.Printf("❌ OCR 초기화 실패: %v\n", err)
 		return
 	}
+	fmt.Println("✅ OCR 준비 완료")
 
 	// /프로필 명령어 전송
+	fmt.Println()
+	fmt.Println("📤 /프로필 명령어 전송 중...")
 	e.sendCommand("/프로필")
+	fmt.Println("⏳ 응답 대기 중 (2초)...")
 	time.Sleep(2 * time.Second)
 
 	// OCR로 프로필 읽기
+	fmt.Println("🔍 화면 캡처 및 OCR 분석 중...")
 	profileText := e.readOCRText()
+
+	// 디버그: OCR 결과 출력
+	if profileText == "" {
+		fmt.Println("⚠️ OCR 결과가 비어있습니다.")
+		fmt.Println()
+		fmt.Println("🔧 문제 해결 방법:")
+		fmt.Println("   1. 카카오톡 창이 화면에 보이는지 확인")
+		fmt.Println("   2. 메시지 입력창 위치가 맞는지 확인")
+		fmt.Printf("   3. 캡처 영역 확인: (%d, %d) ~ (%d, %d)\n",
+			captureX, captureY, captureX+e.cfg.CaptureW, captureY+e.cfg.CaptureH)
+		fmt.Println("   4. 좌표 고정 해제 후 다시 시도 (옵션 설정 → 좌표 고정)")
+		return
+	}
+
 	profile := ParseProfile(profileText)
 
 	if profile == nil || profile.Level < 0 {
-		fmt.Println("❌ 프로필을 읽을 수 없습니다.")
-		fmt.Println("   카카오톡 창이 보이는지 확인하세요.")
+		fmt.Println("❌ 프로필을 파싱할 수 없습니다.")
+		fmt.Println()
+		fmt.Println("📝 OCR 인식된 텍스트 (처음 200자):")
+		preview := profileText
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		fmt.Printf("   %s\n", preview)
+		fmt.Println()
+		fmt.Println("🔧 문제 해결 방법:")
+		fmt.Println("   1. /프로필 명령어가 제대로 전송되었는지 확인")
+		fmt.Println("   2. 카카오톡에서 프로필 응답이 표시되는지 확인")
+		fmt.Println("   3. 메시지 입력창 위치를 다시 설정해보세요")
 		return
 	}
 
