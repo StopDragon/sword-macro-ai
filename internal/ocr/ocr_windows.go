@@ -14,10 +14,10 @@ import (
 )
 
 // Windows OCR은 PowerShell을 통해 Windows.Media.Ocr API 호출
-// 네이티브 WinRT 바인딩보다 간단하고 안정적
 
 type windowsEngine struct {
-	tempDir string
+	tempDir    string
+	scriptPath string
 }
 
 func newEngine() Engine {
@@ -31,6 +31,53 @@ func (e *windowsEngine) Init() error {
 		return err
 	}
 	e.tempDir = tempDir
+
+	// PowerShell 스크립트 파일 생성
+	scriptContent := `param([string]$imagePath)
+
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+
+$null = [Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
+$null = [Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics.Imaging,ContentType=WindowsRuntime]
+
+function Await($WinRtTask, $ResultType) {
+    $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation` + "`" + `1' })[0]
+    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+    $netTask = $asTask.Invoke($null, @($WinRtTask))
+    $netTask.Wait(-1) | Out-Null
+    return $netTask.Result
+}
+
+try {
+    $ocrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage([Windows.Globalization.Language]::new("ko"))
+    if ($ocrEngine -eq $null) {
+        $ocrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+    }
+    if ($ocrEngine -eq $null) {
+        exit 1
+    }
+
+    $storageFile = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($imagePath)) ([Windows.Storage.StorageFile])
+    $stream = Await ($storageFile.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+    $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+    $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+    $ocrResult = Await ($ocrEngine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+
+    foreach ($line in $ocrResult.Lines) {
+        Write-Output $line.Text
+    }
+
+    $stream.Dispose()
+} catch {
+    exit 1
+}
+`
+	e.scriptPath = filepath.Join(e.tempDir, "ocr.ps1")
+	if err := os.WriteFile(e.scriptPath, []byte(scriptContent), 0644); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -52,62 +99,13 @@ func (e *windowsEngine) Recognize(img *image.RGBA) (string, error) {
 	}
 	f.Close()
 
-	// PowerShell로 Windows OCR API 호출
-	script := `
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-
-$asyncInfo = [Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
-$null = [Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]
-$null = [Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics.Imaging,ContentType=WindowsRuntime]
-
-function Await($WinRtTask, $ResultType) {
-    $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() |
-        Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } |
-        Select-Object -First 1
-    $netTask = $asTask.MakeGenericMethod($ResultType).Invoke($null, @($WinRtTask))
-    $netTask.Wait(-1) | Out-Null
-    return $netTask.Result
-}
-
-function AwaitAction($WinRtTask) {
-    $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() |
-        Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncAction' } |
-        Select-Object -First 1
-    $netTask = $asTask.Invoke($null, @($WinRtTask))
-    $netTask.Wait(-1) | Out-Null
-}
-
-$imagePath = '` + strings.ReplaceAll(tempFile, "\\", "\\\\") + `'
-
-# 한국어 OCR 엔진 (없으면 영어 사용)
-$ocrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage([Windows.Globalization.Language]::new("ko"))
-if ($ocrEngine -eq $null) {
-    $ocrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-}
-
-$storageFile = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($imagePath)) ([Windows.Storage.StorageFile])
-$stream = Await ($storageFile.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
-$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
-
-$ocrResult = Await ($ocrEngine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
-
-$lines = @()
-foreach ($line in $ocrResult.Lines) {
-    $lines += $line.Text
-}
-
-$stream.Dispose()
-Write-Output ($lines -join "`n")
-`
-
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	// PowerShell 스크립트 실행
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", e.scriptPath, "-imagePath", tempFile)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		// PowerShell 에러 시 빈 문자열 반환 (정상 동작)
 		return "", nil
 	}
 
@@ -121,26 +119,12 @@ func (e *windowsEngine) Close() {
 	}
 }
 
-// Windows에서 한국어 OCR 언어팩 설치 확인
+// CheckKoreanOCRInstalled Windows에서 한국어 OCR 언어팩 설치 확인
 func CheckKoreanOCRInstalled() error {
-	script := `
-$lang = [Windows.Globalization.Language]::new("ko")
-$ocrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang)
-if ($ocrEngine -eq $null) {
-    Write-Output "NOT_INSTALLED"
-} else {
-    Write-Output "INSTALLED"
-}
-`
+	script := `$lang = [Windows.Globalization.Language]::new("ko"); $ocr = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang); if ($ocr -eq $null) { exit 1 }`
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
-	output, err := cmd.Output()
-	if err != nil {
-		return errors.New("OCR 상태 확인 실패")
+	if err := cmd.Run(); err != nil {
+		return errors.New("한국어 OCR 언어팩이 설치되지 않았습니다")
 	}
-
-	if strings.TrimSpace(string(output)) == "NOT_INSTALLED" {
-		return errors.New("한국어 OCR 언어팩이 설치되지 않았습니다. 설정 > 시간 및 언어 > 언어에서 한국어를 추가하세요")
-	}
-
 	return nil
 }

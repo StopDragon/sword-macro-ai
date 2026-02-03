@@ -18,14 +18,23 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
+          cache: false
 
       - name: Build macOS ARM64
+        env:
+          CGO_ENABLED: 1
+          GOOS: darwin
+          GOARCH: arm64
         run: |
-          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o build/SwordMacro-darwin-arm64 ./cmd/sword-macro
+          go build -ldflags="-s -w" -o build/SwordMacro-darwin-arm64 ./cmd/sword-macro
 
       - name: Build macOS AMD64
+        env:
+          CGO_ENABLED: 1
+          GOOS: darwin
+          GOARCH: amd64
         run: |
-          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o build/SwordMacro-darwin-amd64 ./cmd/sword-macro
+          go build -ldflags="-s -w" -o build/SwordMacro-darwin-amd64 ./cmd/sword-macro
 
       - name: Create Universal Binary
         run: |
@@ -52,10 +61,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
+          cache: false
 
       - name: Build Windows AMD64
+        env:
+          CGO_ENABLED: 1
         run: |
-          go build -ldflags="-s -w" -o build/SwordMacro.exe ./cmd/sword-macro
+          go build -ldflags="-s -w -H=windowsgui" -o build/SwordMacro.exe ./cmd/sword-macro
 
       - name: Create ZIP
         run: |
