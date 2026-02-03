@@ -422,22 +422,31 @@ func ExtractLevel(text string) int {
 
 // ExtractEnhanceResultLevel 강화 결과에서 변경 후 레벨 추출
 // "+0 → +1" 패턴에서 1을 추출, 또는 "획득 검: [+1]" 패턴에서 1을 추출
+// 여러 매칭이 있으면 마지막(가장 최신) 사용
 func ExtractEnhanceResultLevel(text string) int {
-	// 1순위: "+0 → +1" 패턴에서 결과 레벨 추출
-	if matches := enhanceLevelPattern.FindStringSubmatch(text); len(matches) > 2 {
-		if level, err := strconv.Atoi(matches[2]); err == nil {
-			if level >= MinLevel && level <= MaxLevel {
-				return level
+	// 1순위: "+0 → +1" 패턴에서 결과 레벨 추출 (마지막 매칭)
+	allMatches := enhanceLevelPattern.FindAllStringSubmatch(text, -1)
+	if len(allMatches) > 0 {
+		matches := allMatches[len(allMatches)-1] // 마지막 매칭 사용
+		if len(matches) > 2 {
+			if level, err := strconv.Atoi(matches[2]); err == nil {
+				if level >= MinLevel && level <= MaxLevel {
+					return level
+				}
 			}
 		}
 	}
 
-	// 2순위: "획득 검: [+N]" 패턴에서 레벨 추출
+	// 2순위: "획득 검: [+N]" 패턴에서 레벨 추출 (마지막 매칭)
 	swordPattern := regexp.MustCompile(`획득\s*검:\s*\[\+?(\d+)\]`)
-	if matches := swordPattern.FindStringSubmatch(text); len(matches) > 1 {
-		if level, err := strconv.Atoi(matches[1]); err == nil {
-			if level >= MinLevel && level <= MaxLevel {
-				return level
+	allSwordMatches := swordPattern.FindAllStringSubmatch(text, -1)
+	if len(allSwordMatches) > 0 {
+		matches := allSwordMatches[len(allSwordMatches)-1]
+		if len(matches) > 1 {
+			if level, err := strconv.Atoi(matches[1]); err == nil {
+				if level >= MinLevel && level <= MaxLevel {
+					return level
+				}
 			}
 		}
 	}
@@ -595,39 +604,49 @@ func ParseProfile(text string) *Profile {
 		}
 	}
 
-	// 골드 추출 (음수 불가)
-	if matches := profileGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
-		goldStr := strings.ReplaceAll(matches[1], ",", "")
-		if gold, err := strconv.Atoi(goldStr); err == nil {
-			// 골드는 절대 음수가 될 수 없음
-			if gold >= 0 {
-				profile.Gold = gold
+	// 골드 추출 (음수 불가) - 마지막 매칭 사용
+	allGoldMatches := profileGoldPattern.FindAllStringSubmatch(text, -1)
+	if len(allGoldMatches) > 0 {
+		matches := allGoldMatches[len(allGoldMatches)-1]
+		if len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			if gold, err := strconv.Atoi(goldStr); err == nil {
+				// 골드는 절대 음수가 될 수 없음
+				if gold >= 0 {
+					profile.Gold = gold
+				}
 			}
 		}
 	}
 
-	// 보유 검 추출 (레벨 + 이름)
-	if matches := profileSwordPattern.FindStringSubmatch(text); len(matches) > 2 {
-		levelStr := strings.TrimPrefix(matches[1], "+")
-		if level, err := strconv.Atoi(levelStr); err == nil {
-			profile.Level = level
+	// 보유 검 추출 (레벨 + 이름) - 마지막 매칭 사용 (채팅에 여러 프로필 있을 수 있음)
+	allSwordMatches := profileSwordPattern.FindAllStringSubmatch(text, -1)
+	if len(allSwordMatches) > 0 {
+		// 마지막 매칭 사용 (가장 최신 프로필)
+		matches := allSwordMatches[len(allSwordMatches)-1]
+		if len(matches) > 2 {
+			levelStr := strings.TrimPrefix(matches[1], "+")
+			if level, err := strconv.Atoi(levelStr); err == nil {
+				profile.Level = level
+			}
+			profile.SwordName = strings.TrimSpace(matches[2])
 		}
-		profile.SwordName = strings.TrimSpace(matches[2])
 	}
 
-	// 최고 기록 추출
-	if matches := profileBestPattern.FindStringSubmatch(text); len(matches) > 2 {
-		levelStr := strings.TrimPrefix(matches[1], "+")
-		if level, err := strconv.Atoi(levelStr); err == nil {
-			profile.BestLevel = level
+	// 최고 기록 추출 - 마지막 매칭 사용
+	allBestMatches := profileBestPattern.FindAllStringSubmatch(text, -1)
+	if len(allBestMatches) > 0 {
+		matches := allBestMatches[len(allBestMatches)-1]
+		if len(matches) > 2 {
+			levelStr := strings.TrimPrefix(matches[1], "+")
+			if level, err := strconv.Atoi(levelStr); err == nil {
+				profile.BestLevel = level
+			}
+			profile.BestSword = strings.TrimSpace(matches[2])
 		}
-		profile.BestSword = strings.TrimSpace(matches[2])
 	}
 
-	// 레벨이 없으면 일반 패턴으로 시도
-	if profile.Level == -1 {
-		profile.Level = ExtractLevel(text)
-	}
+	// 참고: ExtractLevel fallback 제거 (이전 채팅의 레벨이 잡히는 버그 방지)
 
 	return profile
 }

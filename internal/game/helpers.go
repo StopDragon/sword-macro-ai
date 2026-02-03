@@ -134,20 +134,27 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 		}
 
 		// 레벨 업데이트 (강화 결과 기반)
-		// 핵심: 파싱 실패해도 강화 결과(success/hold)로 레벨 추정
+		// 핵심: ResultLevel("+X → +Y" 패턴에서 추출)이 가장 정확함
+
 		if state.LastResult == "success" {
-			// 강화 성공 = 레벨 +1 (파싱 결과보다 이걸 우선 신뢰)
-			currentLevel++
-			fmt.Printf("  ⚔️ 강화 성공! +%d 도달\n", currentLevel)
+			// 강화 성공 - ResultLevel 우선 사용 (가장 정확함)
+			if state.ResultLevel > 0 {
+				currentLevel = state.ResultLevel
+				fmt.Printf("  ⚔️ 강화 성공! +%d 도달\n", currentLevel)
+			} else {
+				// ResultLevel 파싱 실패 시 fallback으로 +1
+				currentLevel++
+				fmt.Printf("  ⚔️ 강화 성공! +%d 도달 (계산값)\n", currentLevel)
+			}
 		} else if state.LastResult == "hold" {
 			// 유지 = 레벨 변화 없음
 			fmt.Printf("  💫 강화 유지 (현재 +%d)\n", currentLevel)
+		} else if state.LastResult == "destroy" {
+			// 파괴는 위에서 처리됨, 여기 오면 안됨
+			fmt.Printf("  [경고] destroy가 fallback에서 감지됨\n")
 		} else {
-			// 결과 불명확 시 파싱된 레벨 사용 (fallback)
-			newLevel := e.ExtractCurrentLevel(state)
-			if newLevel > currentLevel {
-				currentLevel = newLevel
-			}
+			// 결과 불명확 - 레벨 변경 없이 재시도
+			fmt.Printf("  ❓ 결과 불명확 (LastResult='%s') - 재시도\n", state.LastResult)
 		}
 
 		// 골드 부족 체크
@@ -157,6 +164,14 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 				FormatGold(goldInfo.RequiredGold), FormatGold(goldInfo.RemainingGold))
 			return EnhanceResult{FinalLevel: currentLevel, Success: false, Destroyed: false}
 		}
+
+	}
+
+	// 루프 종료 시 상태 출력
+	if currentLevel >= e.targetLevel {
+		fmt.Printf("  ✅ 목표 달성! +%d (목표: +%d)\n", currentLevel, e.targetLevel)
+	} else {
+		fmt.Printf("  ⚠️ 목표 미달 종료: +%d (목표: +%d)\n", currentLevel, e.targetLevel)
 	}
 
 	return EnhanceResult{

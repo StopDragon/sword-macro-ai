@@ -252,17 +252,19 @@ func (e *Engine) runGoldMineMode() {
 	}
 
 	fmt.Println()
-	fmt.Printf("목표 레벨 (엔터=%d): ", optimalLevel)
+	// 최적 레벨(★)을 기본값으로 사용 (시간 효율 최대화)
+	defaultTarget := optimalLevel
+	fmt.Printf("목표 레벨 (엔터=%d): ", defaultTarget)
 
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(input)
 
 	if input == "" {
-		e.targetLevel = optimalLevel
+		e.targetLevel = defaultTarget
 	} else if level, err := strconv.Atoi(input); err == nil && level >= 1 && level <= 20 {
 		e.targetLevel = level
 	} else {
-		e.targetLevel = optimalLevel
+		e.targetLevel = defaultTarget
 	}
 
 	// 선택한 레벨의 효율성 정보 표시
@@ -853,6 +855,23 @@ func (e *Engine) loopGoldMine() {
 		valid    bool
 	}
 
+	// 세션 시작 시 기존 보유 검 정보 (목표 미달이지만 0강 이상인 경우)
+	var pendingExistingSword struct {
+		name     string
+		itemType string
+		level    int
+		valid    bool
+	}
+
+	// 세션 시작 시 이미 보유한 검이 있고, 목표 미달이면 바로 강화 이어가기
+	if e.sessionProfile != nil && e.sessionProfile.Level > 0 && !e.IsTargetReached(e.sessionProfile.Level) {
+		pendingExistingSword.name = e.sessionProfile.SwordName
+		pendingExistingSword.itemType = DetermineItemType(e.sessionProfile.SwordName)
+		pendingExistingSword.level = e.sessionProfile.Level
+		pendingExistingSword.valid = true
+		fmt.Printf("📋 기존 검 +%d 보유 중 → 목표 +%d까지 강화 이어가기\n", e.sessionProfile.Level, e.targetLevel)
+	}
+
 	for e.running {
 		if e.checkStop() {
 			return
@@ -865,8 +884,16 @@ func (e *Engine) loopGoldMine() {
 		var itemLevel int
 		var found bool
 
-		// 이전 판매로 +0 검을 받았으면 farmForGoldMine 스킵
-		if pendingZeroSword.valid {
+		// 우선순위 1: 세션 시작 시 기존 보유 검 (목표 미달이지만 0강 이상)
+		if pendingExistingSword.valid {
+			itemName = pendingExistingSword.name
+			itemType = pendingExistingSword.itemType
+			itemLevel = pendingExistingSword.level
+			found = true
+			pendingExistingSword.valid = false // 사용 후 초기화
+			fmt.Printf("  📦 기존 보유 검 사용: %s +%d → 강화 이어가기\n", itemName, itemLevel)
+		} else if pendingZeroSword.valid {
+			// 우선순위 2: 이전 판매로 받은 +0 검
 			itemName = pendingZeroSword.name
 			itemType = pendingZeroSword.itemType
 			itemLevel = 0
