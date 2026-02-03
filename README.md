@@ -6,6 +6,35 @@
 
 ---
 
+## 다운로드
+
+**Python 설치 없이** 바로 사용할 수 있는 빌드된 앱입니다.
+
+### ⬇️ [최신 버전 다운로드](../../releases/latest)
+
+| 플랫폼 | 파일 | 설치 방법 |
+|--------|------|-----------|
+| **macOS** | `SwordMacro-macOS.dmg` | DMG 열기 → 앱을 Applications로 드래그 |
+| **Windows** | `SwordMacro-Windows.zip` | 압축 해제 → `SwordMacro.exe` 실행 |
+
+<details>
+<summary>📋 상세 설치 가이드 (클릭)</summary>
+
+#### macOS
+1. DMG 파일 더블클릭 → `SwordMacro.app`을 `Applications` 폴더로 드래그
+2. 첫 실행 시 **"확인되지 않은 개발자"** 경고 → 우클릭 → **열기**
+3. **접근성 권한 허용** (필수): 시스템 설정 > 개인정보 보호 및 보안 > 접근성 > `SwordMacro` 체크
+
+#### Windows
+1. ZIP 압축 해제 → `SwordMacro` 폴더 생성
+2. `SwordMacro.exe` 실행
+3. 첫 실행 시 한국어 OCR 모델 자동 다운로드 (~200MB)
+4. Windows Defender 경고 시: **추가 정보** → **실행**
+
+</details>
+
+---
+
 ## 다른 매크로와 뭐가 다른가?
 
 대부분의 검키우기 매크로는 단순히 `/강화`와 `/판매` 명령어를 반복합니다. sword-macro-ai는 **AI 기반 OCR + 데이터 분석**으로 근본적으로 다른 접근을 합니다.
@@ -239,33 +268,7 @@ print(f"G/h: {total_gold / total_hours:,.0f}")
 
 ---
 
-## 다운로드 (빌드된 앱)
-
-Python 설치 없이 바로 사용할 수 있는 빌드된 앱입니다.
-
-### 다운로드 방법
-1. **[Releases 페이지](../../releases)** 로 이동
-2. 최신 버전에서 본인 OS에 맞는 파일 다운로드
-   - macOS: `SwordMacro-macOS.dmg`
-   - Windows: `SwordMacro-Windows.zip`
-
-### macOS 설치 방법
-1. `SwordMacro-macOS.dmg` 다운로드
-2. DMG 파일 더블클릭 → `SwordMacro.app`을 `Applications` 폴더로 드래그
-3. 첫 실행 시 **"확인되지 않은 개발자"** 경고가 뜨면:
-   - `SwordMacro.app` 우클릭 → **열기** 클릭 → **열기** 버튼 클릭
-4. **접근성 권한 허용** (필수):
-   - 시스템 설정 > 개인정보 보호 및 보안 > 접근성
-   - `SwordMacro` 체크박스 활성화
-
-### Windows 설치 방법
-1. `SwordMacro-Windows.zip` 다운로드
-2. 압축 해제 → `SwordMacro` 폴더 생성됨
-3. 폴더 안의 `SwordMacro.exe` 실행
-4. **첫 실행 시** 한국어 OCR 모델 자동 다운로드 (~200MB, 1회만)
-5. Windows Defender 경고 시: **추가 정보** → **실행** 클릭
-
-### 직접 빌드하기 (개발자용)
+## 직접 빌드하기 (개발자용)
 
 ```bash
 # 가상환경 생성 및 의존성 설치
