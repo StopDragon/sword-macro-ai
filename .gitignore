@@ -25,3 +25,4 @@ build/
 # Build binaries
 sword-api
 sword-macro
+.telemetry_state.json
