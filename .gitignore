@@ -4,12 +4,6 @@
 .vscode/
 .idea/
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-
 # Go
 *.test
 *.out
@@ -18,16 +12,11 @@ __pycache__/
 sword_config.json
 sword_macro.log
 sword_macro.log.bak
-sword_data.csv
 
-# PyInstaller 빌드
+# 빌드
 build/
-dist/
-*.spec.bak
 
 # macOS
-*.app
-*.dmg
 .DS_Store
 
 # Windows
