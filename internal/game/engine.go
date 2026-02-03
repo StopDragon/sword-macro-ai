@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/StopDragon/sword-macro-ai/internal/analysis"
 	"github.com/StopDragon/sword-macro-ai/internal/capture"
 	"github.com/StopDragon/sword-macro-ai/internal/config"
 	"github.com/StopDragon/sword-macro-ai/internal/input"
@@ -50,12 +51,16 @@ type Engine struct {
 	stopTimer *time.Timer
 
 	// 배틀 상태
-	myProfile   *Profile
-	battleWins  int
+	myProfile    *Profile
+	battleWins   int
 	battleLosses int
 
 	// 핫키
 	hotkeyMgr *input.HotkeyManager
+
+	// v2: 세션 분석 및 알림
+	session *analysis.SessionTracker
+	alerts  *analysis.AlertEngine
 }
 
 // NewEngine 엔진 생성
@@ -307,37 +312,58 @@ func (e *Engine) loopHidden() {
 		time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 
 		// OCR로 결과 확인
-		state := e.readGameState()
-		if state != nil && state.ItemType == "hidden" {
-			fmt.Println("\n🎉 히든 아이템 발견!")
-			logger.Info("히든 아이템 발견")
-			e.telem.RecordSword()
-			e.telem.TrySend()
-			return
-		}
+		text := e.readOCRText()
+		state := ParseOCRText(text)
 
-		// 트래시면 판매
-		if state != nil && state.ItemType == "trash" {
-			e.sendCommand("/판매")
-			time.Sleep(500 * time.Millisecond)
+		if state != nil {
+			// v2: 아이템 이름 추출
+			itemName := state.ItemName
+			if itemName == "" {
+				itemName = ExtractItemName(text)
+			}
+
+			if state.ItemType == "hidden" {
+				fmt.Printf("\n🎉 히든 아이템 발견! [%s]\n", itemName)
+				logger.Info("히든 아이템 발견: %s", itemName)
+
+				// v2 텔레메트리: 아이템 이름 포함
+				e.telem.RecordFarmingWithItem(itemName, "hidden")
+				e.telem.RecordSword()
+				e.telem.TrySend()
+				return
+			}
+
+			// 트래시면 판매
+			if state.ItemType == "trash" || state.ItemType == "normal" {
+				// v2 텔레메트리
+				e.telem.RecordFarmingWithItem(itemName, state.ItemType)
+				e.sendCommand("/판매")
+				time.Sleep(500 * time.Millisecond)
+			}
 		}
 	}
 }
 
 func (e *Engine) loopGoldMine() {
+	// v2: 세션 초기화
+	startGold := e.readCurrentGold()
+	e.telem.InitSession(startGold)
+
 	for e.running {
 		e.cycleStartTime = time.Now()
 		e.cycleCount++
 
-		// 1. 파밍
-		if !e.farmUntilHidden() {
+		// 1. 파밍 (아이템 이름 반환)
+		itemName, found := e.farmUntilHiddenWithName()
+		if !found {
 			e.telem.RecordCycle(false)
 			continue
 		}
 
 		// 2. 강화
-		startGold := e.readCurrentGold()
-		if !e.enhanceToTarget() {
+		cycleStartGold := e.readCurrentGold()
+		finalLevel, success := e.enhanceToTargetWithLevel()
+		if !success {
 			e.telem.RecordCycle(false)
 			continue
 		}
@@ -349,16 +375,18 @@ func (e *Engine) loopGoldMine() {
 		// 4. 사이클 통계
 		endGold := e.readCurrentGold()
 		cycleTime := time.Since(e.cycleStartTime)
-		goldEarned := endGold - startGold
+		goldEarned := endGold - cycleStartGold
 		e.totalGold += goldEarned
 
-		// 텔레메트리 기록
+		// v2 텔레메트리 기록
 		e.telem.RecordCycle(true)
 		e.telem.RecordGold(goldEarned)
+		e.telem.RecordSaleWithSword(itemName, finalLevel, goldEarned)
+		e.telem.RecordGoldChange(endGold)
 		e.telem.TrySend()
 
-		fmt.Printf("📦 사이클 #%d: %.1f초, %+dG | 누적: %dG\n",
-			e.cycleCount, cycleTime.Seconds(), goldEarned, e.totalGold)
+		fmt.Printf("📦 사이클 #%d: %.1f초, %+dG | 누적: %dG [%s +%d]\n",
+			e.cycleCount, cycleTime.Seconds(), goldEarned, e.totalGold, itemName, finalLevel)
 	}
 }
 
@@ -384,6 +412,10 @@ func (e *Engine) loopBattle() {
 		e.myProfile.Level+1, e.myProfile.Level+e.cfg.BattleLevelDiff)
 	fmt.Println()
 
+	// v2: 세션 초기화
+	startGold := e.readCurrentGold()
+	e.telem.InitSession(startGold)
+
 	// 배틀 루프
 	for e.running {
 		if e.checkStop() {
@@ -408,8 +440,8 @@ func (e *Engine) loopBattle() {
 
 		// 3. 첫 번째 타겟과 배틀
 		target := targets[0]
-		fmt.Printf("⚔️ #%d: %s (+%d) vs 나 (+%d)\n",
-			e.cycleCount, target.Username, target.Level, e.myProfile.Level)
+		fmt.Printf("⚔️ #%d: %s (+%d) vs 나 (+%d) [%s]\n",
+			e.cycleCount, target.Username, target.Level, e.myProfile.Level, e.myProfile.SwordName)
 
 		e.sendCommand("/배틀 " + target.Username)
 		time.Sleep(3 * time.Second)
@@ -429,8 +461,9 @@ func (e *Engine) loopBattle() {
 			fmt.Println("   → 💔 패배...")
 		}
 
-		// 5. 텔레메트리 기록
-		e.telem.RecordBattle(e.myProfile.Level, target.Level, result.Won, goldEarned)
+		// 5. v2 텔레메트리 기록 (검 이름 포함)
+		e.telem.RecordBattleWithSword(e.myProfile.SwordName, e.myProfile.Level, target.Level, result.Won, goldEarned)
+		e.telem.RecordGoldChange(e.readCurrentGold())
 		e.telem.TrySend()
 
 		// 6. 현재 통계 출력
@@ -484,34 +517,57 @@ func (e *Engine) readOCRText() string {
 }
 
 func (e *Engine) farmUntilHidden() bool {
+	_, found := e.farmUntilHiddenWithName()
+	return found
+}
+
+// farmUntilHiddenWithName 히든 아이템을 찾을 때까지 파밍하고 아이템 이름 반환
+func (e *Engine) farmUntilHiddenWithName() (string, bool) {
 	for e.running {
 		if e.checkStop() {
-			return false
+			return "", false
 		}
 
 		e.sendCommand("/파밍")
 		time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 
-		state := e.readGameState()
+		text := e.readOCRText()
+		state := ParseOCRText(text)
 		if state != nil {
-			if state.ItemType == "hidden" {
-				return true
+			// v2: 아이템 이름 추출
+			itemName := state.ItemName
+			if itemName == "" {
+				itemName = ExtractItemName(text)
 			}
-			if state.ItemType == "trash" {
+
+			if state.ItemType == "hidden" {
+				// v2 텔레메트리
+				e.telem.RecordFarmingWithItem(itemName, "hidden")
+				return itemName, true
+			}
+			if state.ItemType == "trash" || state.ItemType == "normal" {
+				// v2 텔레메트리
+				e.telem.RecordFarmingWithItem(itemName, state.ItemType)
 				e.sendCommand("/판매")
 				time.Sleep(300 * time.Millisecond)
 			}
 		}
 	}
-	return false
+	return "", false
 }
 
 func (e *Engine) enhanceToTarget() bool {
+	_, success := e.enhanceToTargetWithLevel()
+	return success
+}
+
+// enhanceToTargetWithLevel 목표까지 강화하고 최종 레벨 반환
+func (e *Engine) enhanceToTargetWithLevel() (int, bool) {
 	currentLevel := 0
 
 	for currentLevel < e.targetLevel && e.running {
 		if e.checkStop() {
-			return false
+			return currentLevel, false
 		}
 
 		e.sendCommand("/강화")
@@ -527,15 +583,18 @@ func (e *Engine) enhanceToTarget() bool {
 		case "success":
 			currentLevel++
 			fmt.Printf("  ✅ +%d 성공\n", currentLevel)
+			e.telem.RecordEnhance(currentLevel-1, "success")
 		case "destroy":
 			fmt.Println("  💥 파괴!")
-			return false
+			e.telem.RecordEnhance(currentLevel, "destroy")
+			return currentLevel, false
 		case "hold":
 			fmt.Printf("  ⏸️ +%d 유지\n", currentLevel)
+			e.telem.RecordEnhance(currentLevel, "hold")
 		}
 	}
 
-	return currentLevel >= e.targetLevel
+	return currentLevel, currentLevel >= e.targetLevel
 }
 
 func (e *Engine) getDelayForLevel(level int) time.Duration {

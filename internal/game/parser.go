@@ -11,6 +11,7 @@ type GameState struct {
 	Level      int
 	Gold       int
 	ItemType   string // "trash", "hidden", "none"
+	ItemName   string // 아이템 이름 (검, 방망이 등)
 	LastResult string // "success", "hold", "destroy", ""
 }
 
@@ -54,6 +55,14 @@ var (
 	hiddenPattern  = regexp.MustCompile(`(?:히든|hidden|레전더리|전설|유니크)`)
 	trashPattern   = regexp.MustCompile(`(?:일반|노말|커먼|쓰레기)`)
 	farmPattern    = regexp.MustCompile(`(?:획득|얻었|드랍|뽑기)`)
+
+	// 아이템 이름 추출 패턴 (v2)
+	hiddenNamePattern = regexp.MustCompile(`(?:히든|hidden).*?『([^』]+)』`)
+	swordNamePattern  = regexp.MustCompile(`\[([^\]]+)\]\s*(.+?)(?:\s|$|』)`)
+	// 파밍 결과에서 아이템 이름 추출: "불꽃검 획득!" "방망이를 얻었습니다"
+	farmItemPattern   = regexp.MustCompile(`『?([^『』\[\]]+?)』?\s*(?:획득|얻|드랍|뽑)`)
+	// 괄호 안 아이템: 『용검』, 『불꽃검』
+	bracketItemPattern = regexp.MustCompile(`『([^』]+)』`)
 
 	// 프로필 패턴
 	profileNamePattern   = regexp.MustCompile(`이름:\s*(@\S+)`)
@@ -113,12 +122,19 @@ func ParseOCRText(text string) *GameState {
 			state.LastResult = "hold"
 		}
 
-		// 아이템 타입 파싱
+		// 아이템 타입 및 이름 파싱
 		if farmPattern.MatchString(line) {
 			if hiddenPattern.MatchString(line) {
 				state.ItemType = "hidden"
 			} else if trashPattern.MatchString(line) {
 				state.ItemType = "trash"
+			} else {
+				state.ItemType = "normal" // 일반 아이템
+			}
+
+			// 아이템 이름 추출 시도
+			if state.ItemName == "" {
+				state.ItemName = ExtractItemName(line)
 			}
 		}
 	}
@@ -333,4 +349,117 @@ func FindTargetsInRanking(entries []RankingEntry, myLevel int, levelDiff int) []
 	}
 
 	return targets
+}
+
+// === v2 새로운 추출 함수들 ===
+
+// ExtractHiddenName 히든 검 이름 추출
+// 예: "히든 검 『용검』 획득!" -> "용검"
+func ExtractHiddenName(text string) string {
+	if matches := hiddenNamePattern.FindStringSubmatch(text); len(matches) > 1 {
+		return strings.TrimSpace(matches[1])
+	}
+	return ""
+}
+
+// ExtractSwordName 검 이름 추출 (프로필, 배틀 결과 등에서)
+// 예: "[+10] 불꽃검" -> "불꽃검"
+// 예: "『[+10] 불꽃검』" -> "불꽃검"
+func ExtractSwordName(text string) string {
+	// 먼저 레벨 패턴 [+10] 을 찾고 그 뒤의 텍스트를 추출
+	if matches := swordNamePattern.FindStringSubmatch(text); len(matches) > 2 {
+		name := strings.TrimSpace(matches[2])
+		if name != "" {
+			return name
+		}
+	}
+
+	// 대안: 『』 괄호 안에서 검 이름 추출
+	bracketPattern := regexp.MustCompile(`『([^』]+)』`)
+	if matches := bracketPattern.FindStringSubmatch(text); len(matches) > 1 {
+		innerText := matches[1]
+		// [+N] 패턴 제거하고 검 이름만 추출
+		swordOnly := regexp.MustCompile(`\[\+?\d+\]\s*`).ReplaceAllString(innerText, "")
+		return strings.TrimSpace(swordOnly)
+	}
+
+	return ""
+}
+
+// ExtractSwordInfo 검 레벨과 이름 동시 추출
+// 예: "[+10] 불꽃검" -> (10, "불꽃검")
+func ExtractSwordInfo(text string) (int, string) {
+	level := ExtractLevel(text)
+	name := ExtractSwordName(text)
+	return level, name
+}
+
+// ExtractItemName 아이템 이름 추출 (모든 종류: 검, 방망이, 도끼 등)
+// 파밍 결과 메시지에서 아이템 이름을 추출
+// 예: "『불꽃검』 획득!" -> "불꽃검"
+// 예: "방망이를 얻었습니다" -> "방망이"
+// 예: "히든 아이템 『용검』 발견!" -> "용검"
+func ExtractItemName(text string) string {
+	// 1순위: 히든 아이템 패턴
+	if matches := hiddenNamePattern.FindStringSubmatch(text); len(matches) > 1 {
+		return strings.TrimSpace(matches[1])
+	}
+
+	// 2순위: 『』 괄호 안의 아이템
+	if matches := bracketItemPattern.FindStringSubmatch(text); len(matches) > 1 {
+		innerText := matches[1]
+		// [+N] 패턴이 있으면 제거
+		swordOnly := regexp.MustCompile(`\[\+?\d+\]\s*`).ReplaceAllString(innerText, "")
+		name := strings.TrimSpace(swordOnly)
+		if name != "" {
+			return name
+		}
+	}
+
+	// 3순위: "XXX 획득/얻/드랍" 패턴
+	if matches := farmItemPattern.FindStringSubmatch(text); len(matches) > 1 {
+		name := strings.TrimSpace(matches[1])
+		// 불필요한 접미사 제거
+		name = strings.TrimSuffix(name, "을")
+		name = strings.TrimSuffix(name, "를")
+		name = strings.TrimSuffix(name, "이")
+		name = strings.TrimSuffix(name, "가")
+		if name != "" && len(name) < 20 { // 너무 긴 문자열 제외
+			return name
+		}
+	}
+
+	return ""
+}
+
+// ExtractItemInfo 아이템 정보 전체 추출 (레벨, 이름, 타입)
+type ItemInfo struct {
+	Name  string // 아이템 이름
+	Level int    // 레벨 (-1 if 없음)
+	Type  string // "hidden", "normal", "trash", "unknown"
+}
+
+// ExtractFullItemInfo 파밍 결과에서 아이템 정보 전체 추출
+func ExtractFullItemInfo(text string) *ItemInfo {
+	info := &ItemInfo{
+		Level: -1,
+		Type:  "unknown",
+	}
+
+	// 아이템 이름 추출
+	info.Name = ExtractItemName(text)
+
+	// 레벨 추출 (있으면)
+	info.Level = ExtractLevel(text)
+
+	// 타입 결정
+	if hiddenPattern.MatchString(strings.ToLower(text)) {
+		info.Type = "hidden"
+	} else if trashPattern.MatchString(strings.ToLower(text)) {
+		info.Type = "trash"
+	} else if info.Name != "" {
+		info.Type = "normal"
+	}
+
+	return info
 }

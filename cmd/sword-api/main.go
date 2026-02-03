@@ -53,6 +53,7 @@ type GameData struct {
 // 텔레메트리 구조체
 // ========================
 
+// === v1 통계 ===
 type TelemetryStats struct {
 	TotalCycles      int         `json:"total_cycles"`
 	SuccessfulCycles int         `json:"successful_cycles"`
@@ -77,6 +78,43 @@ type TelemetryStats struct {
 	FarmingAttempts  int         `json:"farming_attempts"`
 	HiddenFound      int         `json:"hidden_found"`
 	TrashFound       int         `json:"trash_found"`
+
+	// === v2 새로 추가 ===
+	SwordBattleStats  map[string]*SwordBattleStat  `json:"sword_battle_stats,omitempty"`
+	HiddenFoundByName map[string]int               `json:"hidden_found_by_name,omitempty"`
+	UpsetStatsByDiff  map[int]*UpsetStat           `json:"upset_stats_by_diff,omitempty"`
+	SwordSaleStats    map[string]*SwordSaleStat    `json:"sword_sale_stats,omitempty"`
+	ItemFarmingStats  map[string]*ItemFarmingStat  `json:"item_farming_stats,omitempty"`
+}
+
+// === v2 구조체들 ===
+
+// SwordBattleStat 검 종류별 배틀 통계
+type SwordBattleStat struct {
+	BattleCount   int `json:"battle_count"`
+	BattleWins    int `json:"battle_wins"`
+	UpsetAttempts int `json:"upset_attempts"`
+	UpsetWins     int `json:"upset_wins"`
+}
+
+// UpsetStat 레벨차별 역배 통계
+type UpsetStat struct {
+	Attempts   int `json:"attempts"`
+	Wins       int `json:"wins"`
+	GoldEarned int `json:"gold_earned"`
+}
+
+// SwordSaleStat 검 종류별 판매 통계
+type SwordSaleStat struct {
+	TotalPrice int `json:"total_price"`
+	Count      int `json:"count"`
+}
+
+// ItemFarmingStat 아이템별 파밍 통계
+type ItemFarmingStat struct {
+	TotalCount  int `json:"total_count"`
+	HiddenCount int `json:"hidden_count"`
+	NormalCount int `json:"normal_count"`
 }
 
 type TelemetryPayload struct {
@@ -108,10 +146,22 @@ type StatsStore struct {
 	hiddenFound     int
 	salesCount      int
 	salesTotalGold  int
+
+	// === v2 통계 ===
+	swordBattleStats  map[string]*SwordBattleStat
+	hiddenFoundByName map[string]int
+	upsetStatsByDiff  map[int]*UpsetStat
+	swordSaleStats    map[string]*SwordSaleStat
+	itemFarmingStats  map[string]*ItemFarmingStat
 }
 
 var stats = &StatsStore{
-	enhanceByLevel: make(map[int]int),
+	enhanceByLevel:    make(map[int]int),
+	swordBattleStats:  make(map[string]*SwordBattleStat),
+	hiddenFoundByName: make(map[string]int),
+	upsetStatsByDiff:  make(map[int]*UpsetStat),
+	swordSaleStats:    make(map[string]*SwordSaleStat),
+	itemFarmingStats:  make(map[string]*ItemFarmingStat),
 }
 
 // ========================
@@ -213,6 +263,7 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 
 	// 통계 업데이트
 	stats.mu.Lock()
+	// v1 통계
 	stats.enhanceAttempts += payload.Stats.EnhanceAttempts
 	stats.enhanceSuccess += payload.Stats.EnhanceSuccess
 	stats.enhanceFail += payload.Stats.EnhanceFail
@@ -229,6 +280,54 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 	stats.hiddenFound += payload.Stats.HiddenFound
 	stats.salesCount += payload.Stats.SalesCount
 	stats.salesTotalGold += payload.Stats.SalesTotalGold
+
+	// v2 통계 (schema_version >= 2)
+	if payload.SchemaVersion >= 2 {
+		// 검 종류별 배틀 통계
+		for name, stat := range payload.Stats.SwordBattleStats {
+			if stats.swordBattleStats[name] == nil {
+				stats.swordBattleStats[name] = &SwordBattleStat{}
+			}
+			stats.swordBattleStats[name].BattleCount += stat.BattleCount
+			stats.swordBattleStats[name].BattleWins += stat.BattleWins
+			stats.swordBattleStats[name].UpsetAttempts += stat.UpsetAttempts
+			stats.swordBattleStats[name].UpsetWins += stat.UpsetWins
+		}
+
+		// 히든 이름별 통계
+		for name, cnt := range payload.Stats.HiddenFoundByName {
+			stats.hiddenFoundByName[name] += cnt
+		}
+
+		// 레벨차별 역배 통계
+		for diff, stat := range payload.Stats.UpsetStatsByDiff {
+			if stats.upsetStatsByDiff[diff] == nil {
+				stats.upsetStatsByDiff[diff] = &UpsetStat{}
+			}
+			stats.upsetStatsByDiff[diff].Attempts += stat.Attempts
+			stats.upsetStatsByDiff[diff].Wins += stat.Wins
+			stats.upsetStatsByDiff[diff].GoldEarned += stat.GoldEarned
+		}
+
+		// 검 판매 통계
+		for key, stat := range payload.Stats.SwordSaleStats {
+			if stats.swordSaleStats[key] == nil {
+				stats.swordSaleStats[key] = &SwordSaleStat{}
+			}
+			stats.swordSaleStats[key].TotalPrice += stat.TotalPrice
+			stats.swordSaleStats[key].Count += stat.Count
+		}
+
+		// 아이템 파밍 통계
+		for name, stat := range payload.Stats.ItemFarmingStats {
+			if stats.itemFarmingStats[name] == nil {
+				stats.itemFarmingStats[name] = &ItemFarmingStat{}
+			}
+			stats.itemFarmingStats[name].TotalCount += stat.TotalCount
+			stats.itemFarmingStats[name].HiddenCount += stat.HiddenCount
+			stats.itemFarmingStats[name].NormalCount += stat.NormalCount
+		}
+	}
 	stats.mu.Unlock()
 
 	log.Printf("[텔레메트리] 세션=%s 버전=%s OS=%s", payload.SessionID[:8], payload.AppVersion, payload.OSType)
@@ -317,6 +416,168 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// === v2 API 엔드포인트 ===
+
+// 검 종류별 승률 랭킹
+func handleSwordStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	stats.mu.RLock()
+	defer stats.mu.RUnlock()
+
+	type SwordEntry struct {
+		Name         string  `json:"name"`
+		BattleCount  int     `json:"battle_count"`
+		WinRate      float64 `json:"win_rate"`
+		UpsetWinRate float64 `json:"upset_win_rate"`
+	}
+
+	var swords []SwordEntry
+	for name, stat := range stats.swordBattleStats {
+		winRate := 0.0
+		upsetWinRate := 0.0
+		if stat.BattleCount > 0 {
+			winRate = float64(stat.BattleWins) / float64(stat.BattleCount) * 100
+		}
+		if stat.UpsetAttempts > 0 {
+			upsetWinRate = float64(stat.UpsetWins) / float64(stat.UpsetAttempts) * 100
+		}
+		swords = append(swords, SwordEntry{
+			Name:         name,
+			BattleCount:  stat.BattleCount,
+			WinRate:      winRate,
+			UpsetWinRate: upsetWinRate,
+		})
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"swords": swords,
+	})
+}
+
+// 히든 검 출현 확률
+func handleHiddenStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	stats.mu.RLock()
+	defer stats.mu.RUnlock()
+
+	type HiddenEntry struct {
+		Name  string  `json:"name"`
+		Count int     `json:"count"`
+		Rate  float64 `json:"rate"`
+	}
+
+	var hidden []HiddenEntry
+	for name, cnt := range stats.hiddenFoundByName {
+		rate := 0.0
+		if stats.farmingAttempts > 0 {
+			rate = float64(cnt) / float64(stats.farmingAttempts) * 100
+		}
+		hidden = append(hidden, HiddenEntry{
+			Name:  name,
+			Count: cnt,
+			Rate:  rate,
+		})
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_farming": stats.farmingAttempts,
+		"hidden":        hidden,
+	})
+}
+
+// 역배 실측 승률
+func handleUpsetStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	stats.mu.RLock()
+	defer stats.mu.RUnlock()
+
+	// 이론 승률
+	theoryRates := map[int]float64{
+		1: 35.0,
+		2: 20.0,
+		3: 10.0,
+	}
+
+	type DiffStat struct {
+		Attempts   int     `json:"attempts"`
+		Wins       int     `json:"wins"`
+		WinRate    float64 `json:"win_rate"`
+		Theory     float64 `json:"theory"`
+		GoldEarned int     `json:"gold_earned"`
+	}
+
+	byDiff := make(map[string]DiffStat)
+	for diff := 1; diff <= 3; diff++ {
+		stat := stats.upsetStatsByDiff[diff]
+		winRate := 0.0
+		attempts := 0
+		wins := 0
+		gold := 0
+		if stat != nil {
+			attempts = stat.Attempts
+			wins = stat.Wins
+			gold = stat.GoldEarned
+			if attempts > 0 {
+				winRate = float64(wins) / float64(attempts) * 100
+			}
+		}
+		byDiff[fmt.Sprintf("%d", diff)] = DiffStat{
+			Attempts:   attempts,
+			Wins:       wins,
+			WinRate:    winRate,
+			Theory:     theoryRates[diff],
+			GoldEarned: gold,
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"by_level_diff": byDiff,
+	})
+}
+
+// 아이템 파밍 통계
+func handleItemStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	stats.mu.RLock()
+	defer stats.mu.RUnlock()
+
+	type ItemEntry struct {
+		Name        string  `json:"name"`
+		TotalCount  int     `json:"total_count"`
+		HiddenCount int     `json:"hidden_count"`
+		NormalCount int     `json:"normal_count"`
+		HiddenRate  float64 `json:"hidden_rate"`
+	}
+
+	var items []ItemEntry
+	for name, stat := range stats.itemFarmingStats {
+		hiddenRate := 0.0
+		if stat.TotalCount > 0 {
+			hiddenRate = float64(stat.HiddenCount) / float64(stat.TotalCount) * 100
+		}
+		items = append(items, ItemEntry{
+			Name:        name,
+			TotalCount:  stat.TotalCount,
+			HiddenCount: stat.HiddenCount,
+			NormalCount: stat.NormalCount,
+			HiddenRate:  hiddenRate,
+		})
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_farming": stats.farmingAttempts,
+		"items":         items,
+	})
+}
+
 func generateSignature(sessionID, period string) string {
 	h := sha256.Sum256([]byte(sessionID + period + appSecret))
 	return hex.EncodeToString(h[:])[:16]
@@ -334,11 +595,20 @@ func main() {
 	http.HandleFunc("/api/game-data", handleGameData)
 	http.HandleFunc("/api/telemetry", handleTelemetry)
 	http.HandleFunc("/api/stats/detailed", handleStatsDetailed)
+	// v2 엔드포인트
+	http.HandleFunc("/api/stats/swords", handleSwordStats)
+	http.HandleFunc("/api/stats/hidden", handleHiddenStats)
+	http.HandleFunc("/api/stats/upset", handleUpsetStats)
+	http.HandleFunc("/api/stats/items", handleItemStats)
 
 	log.Printf("🚀 Sword API 서버 시작 (포트: %s)", port)
 	log.Printf("   /api/game-data - 게임 데이터 조회")
 	log.Printf("   /api/telemetry - 텔레메트리 수신")
 	log.Printf("   /api/stats/detailed - 커뮤니티 통계")
+	log.Printf("   /api/stats/swords - 검 종류별 승률 (v2)")
+	log.Printf("   /api/stats/hidden - 히든 검 출현 확률 (v2)")
+	log.Printf("   /api/stats/upset - 역배 실측 승률 (v2)")
+	log.Printf("   /api/stats/items - 아이템 파밍 통계 (v2)")
 
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatal(err)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,11 +19,47 @@ import (
 const (
 	endpoint     = "https://sword-ai.stopdragon.kr/api/telemetry"
 	stateFile    = ".telemetry_state.json"
-	schemaVer    = 1
+	schemaVer    = 2 // v2: 검 종류별 통계, 히든 이름별 통계, 세션 통계 추가
 	sendTimeout  = 5 * time.Second
 	sendInterval = 5 * time.Minute
 	appSecret    = "sw0rd-m4cr0-2026-s3cr3t-k3y"
 )
+
+// SwordBattleStat 검 종류별 배틀 통계
+type SwordBattleStat struct {
+	BattleCount   int `json:"battle_count"`
+	BattleWins    int `json:"battle_wins"`
+	UpsetAttempts int `json:"upset_attempts"`
+	UpsetWins     int `json:"upset_wins"`
+}
+
+// UpsetStat 레벨차별 역배 통계
+type UpsetStat struct {
+	Attempts   int `json:"attempts"`
+	Wins       int `json:"wins"`
+	GoldEarned int `json:"gold_earned"`
+}
+
+// SwordSaleStat 검 종류별 판매 통계
+type SwordSaleStat struct {
+	TotalPrice int `json:"total_price"`
+	Count      int `json:"count"`
+}
+
+// SessionStats 세션 통계
+type SessionStats struct {
+	StartingGold int `json:"starting_gold"`
+	EndingGold   int `json:"ending_gold"`
+	PeakGold     int `json:"peak_gold"`
+	LowestGold   int `json:"lowest_gold"`
+}
+
+// ItemFarmingStat 아이템별 파밍 통계
+type ItemFarmingStat struct {
+	TotalCount  int `json:"total_count"`  // 총 획득 횟수
+	HiddenCount int `json:"hidden_count"` // 히든으로 획득한 횟수
+	NormalCount int `json:"normal_count"` // 일반으로 획득한 횟수
+}
 
 // Stats 수집 통계
 type Stats struct {
@@ -35,11 +72,11 @@ type Stats struct {
 	SessionDuration  int `json:"session_duration_sec"`
 
 	// 강화 통계
-	EnhanceAttempts int            `json:"enhance_attempts"`
-	EnhanceSuccess  int            `json:"enhance_success"`
-	EnhanceFail     int            `json:"enhance_fail"`
-	EnhanceDestroy  int            `json:"enhance_destroy"`
-	EnhanceByLevel  map[int]int    `json:"enhance_by_level,omitempty"` // level -> success count
+	EnhanceAttempts int         `json:"enhance_attempts"`
+	EnhanceSuccess  int         `json:"enhance_success"`
+	EnhanceFail     int         `json:"enhance_fail"`
+	EnhanceDestroy  int         `json:"enhance_destroy"`
+	EnhanceByLevel  map[int]int `json:"enhance_by_level,omitempty"` // level -> success count
 
 	// 배틀 통계
 	BattleCount      int `json:"battle_count"`
@@ -58,6 +95,26 @@ type Stats struct {
 	FarmingAttempts int `json:"farming_attempts"`
 	HiddenFound     int `json:"hidden_found"`
 	TrashFound      int `json:"trash_found"`
+
+	// === v2 새로 추가 ===
+
+	// 검 종류별 배틀 통계: "불꽃검" -> SwordBattleStat
+	SwordBattleStats map[string]*SwordBattleStat `json:"sword_battle_stats,omitempty"`
+
+	// 히든 검 발견 통계: "용검" -> 3
+	HiddenFoundByName map[string]int `json:"hidden_found_by_name,omitempty"`
+
+	// 모든 아이템 파밍 통계: "불꽃검" -> {count: 5, hidden: 1}
+	ItemFarmingStats map[string]*ItemFarmingStat `json:"item_farming_stats,omitempty"`
+
+	// 레벨차별 역배 통계: 1 -> UpsetStat, 2 -> UpsetStat, 3 -> UpsetStat
+	UpsetStatsByDiff map[int]*UpsetStat `json:"upset_stats_by_diff,omitempty"`
+
+	// 검+레벨별 판매 통계: "불꽃검_10" -> SwordSaleStat
+	SwordSaleStats map[string]*SwordSaleStat `json:"sword_sale_stats,omitempty"`
+
+	// 세션 통계
+	Session *SessionStats `json:"session,omitempty"`
 }
 
 // Payload 서버 전송 데이터
@@ -230,6 +287,201 @@ func (t *Telemetry) RecordFarming(isHidden bool) {
 		t.stats.HiddenFound++
 	} else {
 		t.stats.TrashFound++
+	}
+}
+
+// === v2 새로운 Record 함수들 ===
+
+// RecordBattleWithSword 검 종류 포함 배틀 기록
+func (t *Telemetry) RecordBattleWithSword(swordName string, myLevel, oppLevel int, won bool, goldEarned int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled {
+		return
+	}
+
+	// 기존 배틀 통계 업데이트
+	t.stats.BattleCount++
+	levelDiff := oppLevel - myLevel
+	isUpset := levelDiff > 0
+
+	if isUpset {
+		t.stats.UpsetAttempts++
+	}
+
+	if won {
+		t.stats.BattleWins++
+		t.stats.BattleGoldEarned += goldEarned
+		if isUpset {
+			t.stats.UpsetWins++
+		}
+	} else {
+		t.stats.BattleLosses++
+	}
+
+	// 검 종류별 배틀 통계 (v2)
+	if swordName != "" {
+		if t.stats.SwordBattleStats == nil {
+			t.stats.SwordBattleStats = make(map[string]*SwordBattleStat)
+		}
+		if t.stats.SwordBattleStats[swordName] == nil {
+			t.stats.SwordBattleStats[swordName] = &SwordBattleStat{}
+		}
+		stat := t.stats.SwordBattleStats[swordName]
+		stat.BattleCount++
+		if isUpset {
+			stat.UpsetAttempts++
+		}
+		if won {
+			stat.BattleWins++
+			if isUpset {
+				stat.UpsetWins++
+			}
+		}
+	}
+
+	// 레벨차별 역배 통계 (v2)
+	if isUpset && levelDiff <= 3 {
+		if t.stats.UpsetStatsByDiff == nil {
+			t.stats.UpsetStatsByDiff = make(map[int]*UpsetStat)
+		}
+		if t.stats.UpsetStatsByDiff[levelDiff] == nil {
+			t.stats.UpsetStatsByDiff[levelDiff] = &UpsetStat{}
+		}
+		stat := t.stats.UpsetStatsByDiff[levelDiff]
+		stat.Attempts++
+		if won {
+			stat.Wins++
+			stat.GoldEarned += goldEarned
+		}
+	}
+}
+
+// RecordHiddenWithName 히든 검 이름 포함 기록
+func (t *Telemetry) RecordHiddenWithName(swordName string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled {
+		return
+	}
+
+	// 기존 통계 업데이트
+	t.stats.FarmingAttempts++
+	t.stats.HiddenFound++
+
+	// 히든 검 이름별 통계 (v2)
+	if swordName != "" {
+		if t.stats.HiddenFoundByName == nil {
+			t.stats.HiddenFoundByName = make(map[string]int)
+		}
+		t.stats.HiddenFoundByName[swordName]++
+	}
+}
+
+// RecordFarmingWithItem 아이템 이름과 타입 포함 파밍 기록
+// itemType: "hidden", "normal", "trash"
+func (t *Telemetry) RecordFarmingWithItem(itemName string, itemType string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled {
+		return
+	}
+
+	// 기존 통계 업데이트
+	t.stats.FarmingAttempts++
+	if itemType == "hidden" {
+		t.stats.HiddenFound++
+	} else if itemType == "trash" || itemType == "normal" {
+		t.stats.TrashFound++
+	}
+
+	// 아이템별 파밍 통계 (v2)
+	if itemName != "" {
+		// 히든 이름별 통계
+		if itemType == "hidden" {
+			if t.stats.HiddenFoundByName == nil {
+				t.stats.HiddenFoundByName = make(map[string]int)
+			}
+			t.stats.HiddenFoundByName[itemName]++
+		}
+
+		// 전체 아이템 통계
+		if t.stats.ItemFarmingStats == nil {
+			t.stats.ItemFarmingStats = make(map[string]*ItemFarmingStat)
+		}
+		if t.stats.ItemFarmingStats[itemName] == nil {
+			t.stats.ItemFarmingStats[itemName] = &ItemFarmingStat{}
+		}
+		stat := t.stats.ItemFarmingStats[itemName]
+		stat.TotalCount++
+		if itemType == "hidden" {
+			stat.HiddenCount++
+		} else {
+			stat.NormalCount++
+		}
+	}
+}
+
+// RecordSaleWithSword 검 종류 포함 판매 기록
+func (t *Telemetry) RecordSaleWithSword(swordName string, level int, price int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled {
+		return
+	}
+
+	// 기존 판매 통계 업데이트
+	t.stats.SalesCount++
+	t.stats.SalesTotalGold += price
+	if price > t.stats.SalesMaxPrice {
+		t.stats.SalesMaxPrice = price
+	}
+
+	// 검+레벨별 판매 통계 (v2)
+	if swordName != "" {
+		if t.stats.SwordSaleStats == nil {
+			t.stats.SwordSaleStats = make(map[string]*SwordSaleStat)
+		}
+		key := fmt.Sprintf("%s_%d", swordName, level)
+		if t.stats.SwordSaleStats[key] == nil {
+			t.stats.SwordSaleStats[key] = &SwordSaleStat{}
+		}
+		stat := t.stats.SwordSaleStats[key]
+		stat.Count++
+		stat.TotalPrice += price
+	}
+}
+
+// InitSession 세션 시작 시 초기화
+func (t *Telemetry) InitSession(startingGold int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled {
+		return
+	}
+
+	t.stats.Session = &SessionStats{
+		StartingGold: startingGold,
+		EndingGold:   startingGold,
+		PeakGold:     startingGold,
+		LowestGold:   startingGold,
+	}
+}
+
+// RecordGoldChange 골드 변화 기록 (세션 통계용)
+func (t *Telemetry) RecordGoldChange(currentGold int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled || t.stats.Session == nil {
+		return
+	}
+
+	t.stats.Session.EndingGold = currentGold
+	if currentGold > t.stats.Session.PeakGold {
+		t.stats.Session.PeakGold = currentGold
+	}
+	if currentGold < t.stats.Session.LowestGold {
+		t.stats.Session.LowestGold = currentGold
 	}
 }
 
