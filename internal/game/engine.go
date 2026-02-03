@@ -787,9 +787,25 @@ func (e *Engine) showMyProfile() {
 	captureX := e.cfg.ClickX - e.cfg.CaptureW/2
 	captureY := e.cfg.ClickY - e.cfg.InputBoxH/2 - e.cfg.CaptureH
 	fmt.Println()
-	fmt.Println("📸 OCR 캡처 영역:")
-	fmt.Printf("   위치: (%d, %d)\n", captureX, captureY)
-	fmt.Printf("   크기: %d x %d\n", e.cfg.CaptureW, e.cfg.CaptureH)
+	fmt.Println("┌─────────────────────────────────────────┐")
+	fmt.Println("│          📸 OCR 캡처 영역               │")
+	fmt.Println("├─────────────────────────────────────────┤")
+	fmt.Printf("│  좌상단: (%d, %d)                      \n", captureX, captureY)
+	fmt.Printf("│  우하단: (%d, %d)                      \n", captureX+e.cfg.CaptureW, captureY+e.cfg.CaptureH)
+	fmt.Printf("│  크기: %d x %d                         \n", e.cfg.CaptureW, e.cfg.CaptureH)
+	fmt.Println("└─────────────────────────────────────────┘")
+	fmt.Println()
+	fmt.Println("⚠️  카카오톡 채팅창을 위 영역에 맞춰 배치하세요!")
+	fmt.Println("    (프로필 응답이 OCR 영역 안에 보여야 합니다)")
+	fmt.Println()
+
+	// 5초 대기 (사용자가 카톡 창을 OCR 영역으로 이동할 시간)
+	fmt.Print("⏳ 준비 대기: ")
+	for i := 5; i > 0; i-- {
+		fmt.Printf("%d... ", i)
+		time.Sleep(1 * time.Second)
+	}
+	fmt.Println("시작!")
 	fmt.Println()
 
 	// OCR 초기화
