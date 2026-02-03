@@ -2,7 +2,10 @@ package game
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -85,6 +88,7 @@ func (e *Engine) RunMenu() {
 		fmt.Println("3. 골드 채굴 (돈벌기)")
 		fmt.Println("4. 자동 배틀 (역배)")
 		fmt.Println("5. 옵션 설정")
+		fmt.Println("6. 커뮤니티 통계")
 		fmt.Println("0. 종료")
 		fmt.Println()
 		fmt.Print("선택: ")
@@ -103,6 +107,8 @@ func (e *Engine) RunMenu() {
 			e.runBattleMode(reader)
 		case "5":
 			e.showSettings(reader)
+		case "6":
+			e.showCommunityStats()
 		case "0":
 			fmt.Println("프로그램을 종료합니다.")
 			return
@@ -699,4 +705,79 @@ func (e *Engine) showSettings(reader *bufio.Reader) {
 			return
 		}
 	}
+}
+
+func (e *Engine) showCommunityStats() {
+	fmt.Println()
+	fmt.Println("=== 커뮤니티 통계 ===")
+	fmt.Println("서버에서 데이터를 가져오는 중...")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get("https://sword-ai.stopdragon.kr/api/stats/detailed")
+	if err != nil {
+		fmt.Printf("❌ 서버 연결 실패: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("❌ 서버 오류: %d\n", resp.StatusCode)
+		return
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("❌ 데이터 읽기 실패: %v\n", err)
+		return
+	}
+
+	var stats map[string]interface{}
+	if err := json.Unmarshal(body, &stats); err != nil {
+		fmt.Printf("❌ 데이터 파싱 실패: %v\n", err)
+		return
+	}
+
+	fmt.Println()
+
+	// 강화 통계
+	if enhance, ok := stats["강화"].(map[string]interface{}); ok {
+		fmt.Println("📈 강화 통계")
+		fmt.Printf("   총 시도: %v회\n", enhance["총_시도"])
+		fmt.Printf("   성공률: %v | 유지율: %v | 파괴율: %v\n",
+			enhance["성공률"], enhance["유지율"], enhance["파괴율"])
+		if byLevel, ok := enhance["레벨별_성공"].(map[string]interface{}); ok && len(byLevel) > 0 {
+			fmt.Print("   레벨별 성공: ")
+			for k, v := range byLevel {
+				fmt.Printf("%s=%v ", k, v)
+			}
+			fmt.Println()
+		}
+		fmt.Println()
+	}
+
+	// 배틀 통계
+	if battle, ok := stats["배틀"].(map[string]interface{}); ok {
+		fmt.Println("⚔️ 배틀 통계")
+		fmt.Printf("   총 대결: %v회 | 승률: %v\n", battle["총_대결"], battle["승률"])
+		fmt.Printf("   역배 시도: %v회 | 역배 승률: %v\n", battle["역배_시도"], battle["역배_승률"])
+		fmt.Printf("   총 전리품: %v | 평균: %v\n", battle["총_전리품"], battle["평균_전리품"])
+		fmt.Println()
+	}
+
+	// 파밍 통계
+	if farming, ok := stats["파밍"].(map[string]interface{}); ok {
+		fmt.Println("🎣 파밍 통계")
+		fmt.Printf("   총 시도: %v회 | 히든 확률: %v\n", farming["총_시도"], farming["히든_확률"])
+		fmt.Println()
+	}
+
+	// 판매 통계
+	if sales, ok := stats["판매"].(map[string]interface{}); ok {
+		fmt.Println("💰 판매 통계")
+		fmt.Printf("   총 판매: %v회 | 총 수익: %v\n", sales["총_판매"], sales["총_수익"])
+		fmt.Printf("   평균 가격: %v\n", sales["평균_가격"])
+		fmt.Println()
+	}
+
+	fmt.Println("💡 이 통계는 모든 사용자의 익명 데이터를 집계한 결과입니다.")
 }
