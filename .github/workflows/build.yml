@@ -67,7 +67,7 @@ jobs:
         env:
           CGO_ENABLED: 1
         run: |
-          go build -ldflags="-s -w -H=windowsgui" -o build/SwordMacro.exe ./cmd/sword-macro
+          go build -ldflags="-s -w" -o build/SwordMacro.exe ./cmd/sword-macro
 
       - name: Create ZIP
         run: |
