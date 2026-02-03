@@ -62,6 +62,19 @@ type Engine struct {
 	// v2: 세션 분석 및 알림
 	session *analysis.SessionTracker
 	alerts  *analysis.AlertEngine
+
+	// 세션 통계 (종료 시 출력용)
+	sessionStats struct {
+		startGold       int
+		endGold         int
+		trashCount      int
+		hiddenCount     int
+		enhanceSuccess  int
+		enhanceHold     int
+		enhanceDestroy  int
+		cycleTimeSum    float64 // 사이클 시간 합계 (초)
+		cycleGoldSum    int     // 사이클 수익 합계
+	}
 }
 
 // NewEngine 엔진 생성
@@ -255,6 +268,17 @@ func (e *Engine) setupAndRun() {
 	e.totalGold = 0
 	e.startTime = time.Now()
 
+	// 세션 통계 초기화
+	e.sessionStats.startGold = e.readCurrentGold()
+	e.sessionStats.endGold = 0
+	e.sessionStats.trashCount = 0
+	e.sessionStats.hiddenCount = 0
+	e.sessionStats.enhanceSuccess = 0
+	e.sessionStats.enhanceHold = 0
+	e.sessionStats.enhanceDestroy = 0
+	e.sessionStats.cycleTimeSum = 0
+	e.sessionStats.cycleGoldSum = 0
+
 	// 타이머 설정 (시간 제한이 있는 경우)
 	if e.duration > 0 {
 		e.stopTimer = time.AfterFunc(e.duration, func() {
@@ -283,15 +307,13 @@ func (e *Engine) setupAndRun() {
 	time.Sleep(500 * time.Millisecond)
 	overlay.HideAll()
 
-	// 종료 시 통계 출력 및 텔레메트리 전송
-	elapsed := time.Since(e.startTime)
-	fmt.Println()
-	fmt.Println("=== 매크로 종료 ===")
-	fmt.Printf("⏱️ 실행 시간: %s\n", formatDuration(elapsed))
-	fmt.Printf("🔄 총 사이클: %d회\n", e.cycleCount)
-	if e.totalGold > 0 {
-		fmt.Printf("💰 총 수익: %dG\n", e.totalGold)
-	}
+	// 종료 시 현재 골드 읽기
+	e.sessionStats.endGold = e.readCurrentGold()
+
+	// 상세 통계 출력
+	e.printSessionStats()
+
+	// 텔레메트리 전송
 	fmt.Println("📤 통계 전송 중...")
 	e.telem.Flush()
 	fmt.Println("✅ 완료!")
@@ -309,6 +331,97 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%d분 %d초", m, s)
 	}
 	return fmt.Sprintf("%d초", s)
+}
+
+// printSessionStats 세션 종료 시 상세 통계 출력
+func (e *Engine) printSessionStats() {
+	elapsed := time.Since(e.startTime)
+	elapsedSec := elapsed.Seconds()
+
+	// 골드 변화 계산
+	goldDiff := e.sessionStats.endGold - e.sessionStats.startGold
+	if e.sessionStats.startGold <= 0 {
+		goldDiff = e.totalGold // 시작 골드를 못 읽었으면 누적 수익 사용
+	}
+
+	// 시간당 골드 계산
+	goldPerHour := 0
+	if elapsedSec > 0 {
+		goldPerHour = int(float64(goldDiff) / elapsedSec * 3600)
+	}
+
+	// 사이클 평균 계산
+	avgCycleTime := 0.0
+	avgCycleGold := 0
+	if e.cycleCount > 0 {
+		avgCycleTime = e.sessionStats.cycleTimeSum / float64(e.cycleCount)
+		avgCycleGold = e.sessionStats.cycleGoldSum / e.cycleCount
+	}
+
+	// 골드 부호
+	goldSign := "+"
+	if goldDiff < 0 {
+		goldSign = ""
+	}
+	gphSign := "+"
+	if goldPerHour < 0 {
+		gphSign = ""
+	}
+
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("  📊 세션 통계 (%s)\n", formatDuration(elapsed))
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	// 파밍 통계
+	if e.sessionStats.trashCount > 0 || e.sessionStats.hiddenCount > 0 {
+		fmt.Printf("  🎣 트래시 판매: %d회\n", e.sessionStats.trashCount)
+		fmt.Printf("  ⭐ 히든 발견:   %d회\n", e.sessionStats.hiddenCount)
+	}
+
+	// 강화 통계
+	enhanceTotal := e.sessionStats.enhanceSuccess + e.sessionStats.enhanceHold + e.sessionStats.enhanceDestroy
+	if enhanceTotal > 0 {
+		fmt.Printf("  ✅ 강화 성공:   %d회\n", e.sessionStats.enhanceSuccess)
+		fmt.Printf("  ⏸️  강화 유지:   %d회\n", e.sessionStats.enhanceHold)
+		fmt.Printf("  💥 강화 파괴:   %d회\n", e.sessionStats.enhanceDestroy)
+	}
+
+	// 배틀 통계
+	if e.battleWins > 0 || e.battleLosses > 0 {
+		winRate := 0.0
+		if e.battleWins+e.battleLosses > 0 {
+			winRate = float64(e.battleWins) / float64(e.battleWins+e.battleLosses) * 100
+		}
+		fmt.Printf("  ⚔️  배틀 전적:   %d승 %d패 (%.1f%%)\n", e.battleWins, e.battleLosses, winRate)
+	}
+
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	// 골드 통계
+	if e.sessionStats.startGold > 0 && e.sessionStats.endGold > 0 {
+		fmt.Printf("  💰 골드 변화:   %sG → %sG (%s%sG)\n",
+			FormatGold(e.sessionStats.startGold),
+			FormatGold(e.sessionStats.endGold),
+			goldSign, FormatGold(goldDiff))
+	} else if e.totalGold != 0 {
+		fmt.Printf("  💰 총 수익:     %s%sG\n", goldSign, FormatGold(goldDiff))
+	}
+
+	fmt.Printf("  📈 시간당 골드: %s%sG/h\n", gphSign, FormatGold(goldPerHour))
+
+	// 사이클 통계
+	if e.cycleCount > 0 {
+		avgGoldSign := "+"
+		if avgCycleGold < 0 {
+			avgGoldSign = ""
+		}
+		fmt.Printf("  🔄 완료 사이클: %d회 (평균 %.0f초, %s%sG/사이클)\n",
+			e.cycleCount, avgCycleTime, avgGoldSign, FormatGold(avgCycleGold))
+	}
+
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println()
 }
 
 func (e *Engine) loopEnhance() {
@@ -368,6 +481,7 @@ func (e *Engine) loopHidden() {
 				e.telem.RecordFarmingWithItem(itemName, "hidden")
 				e.telem.RecordSword()
 				e.telem.TrySend()
+				e.sessionStats.hiddenCount++
 				return
 			}
 
@@ -375,6 +489,7 @@ func (e *Engine) loopHidden() {
 			if state.ItemType == "trash" || state.ItemType == "normal" {
 				// v2 텔레메트리
 				e.telem.RecordFarmingWithItem(itemName, state.ItemType)
+				e.sessionStats.trashCount++
 				e.sendCommand("/판매")
 				time.Sleep(500 * time.Millisecond)
 			}
@@ -427,6 +542,10 @@ func (e *Engine) loopGoldMine() {
 		e.telem.RecordSaleWithSword(itemName, finalLevel, goldEarned)
 		e.telem.RecordGoldChange(endGold)
 		e.telem.TrySend()
+
+		// 세션 통계 업데이트
+		e.sessionStats.cycleTimeSum += cycleTime.Seconds()
+		e.sessionStats.cycleGoldSum += goldEarned
 
 		// 사이클 완료 상태 업데이트
 		overlay.UpdateStatus("💰 골드 채굴 #%d ✅\n%s +%d → %+sG\n누적: %sG", e.cycleCount, itemName, finalLevel, FormatGold(goldEarned), FormatGold(e.totalGold))
@@ -589,11 +708,13 @@ func (e *Engine) farmUntilHiddenWithName() (string, bool) {
 			if state.ItemType == "hidden" {
 				// v2 텔레메트리
 				e.telem.RecordFarmingWithItem(itemName, "hidden")
+				e.sessionStats.hiddenCount++
 				return itemName, true
 			}
 			if state.ItemType == "trash" || state.ItemType == "normal" {
 				// v2 텔레메트리
 				e.telem.RecordFarmingWithItem(itemName, state.ItemType)
+				e.sessionStats.trashCount++
 				e.sendCommand("/판매")
 				time.Sleep(300 * time.Millisecond)
 			}
@@ -630,13 +751,16 @@ func (e *Engine) enhanceToTargetWithLevel() (int, bool) {
 			currentLevel++
 			fmt.Printf("  ✅ +%d 성공\n", currentLevel)
 			e.telem.RecordEnhance(currentLevel-1, "success")
+			e.sessionStats.enhanceSuccess++
 		case "destroy":
 			fmt.Println("  💥 파괴!")
 			e.telem.RecordEnhance(currentLevel, "destroy")
+			e.sessionStats.enhanceDestroy++
 			return currentLevel, false
 		case "hold":
 			fmt.Printf("  ⏸️ +%d 유지\n", currentLevel)
 			e.telem.RecordEnhance(currentLevel, "hold")
+			e.sessionStats.enhanceHold++
 		}
 	}
 
