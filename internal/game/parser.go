@@ -110,6 +110,8 @@ var (
 	battleResultPattern = regexp.MustCompile(`결과.*(@\S+).*승리`)
 	battleGoldPattern   = regexp.MustCompile(`전리품\s*(\d{1,3}(?:,\d{3})*)\s*G`)
 	battleVsPattern     = regexp.MustCompile(`(@\S+)\s*『\[([^\]]+)\]`)
+	// 배틀 횟수 제한 패턴 (하루 10회 제한 도달 시)
+	battleLimitPattern  = regexp.MustCompile(`(?:배틀\s*횟수\s*제한|오늘\s*배틀.*모두\s*사용)`)
 )
 
 // ParseOCRText OCR 텍스트 파싱 (범위 검증 포함)
@@ -342,16 +344,30 @@ func ExtractCurrentGold(text string) int {
 
 // SaleResult 판매 결과 정보
 type SaleResult struct {
-	SaleGold    int // 판매 수익
-	CurrentGold int // 현재 보유 골드
+	SaleGold     int    // 판매 수익
+	CurrentGold  int    // 현재 보유 골드
+	NewSwordName string // 새로 획득한 검 이름
+	NewSwordLvl  int    // 새로 획득한 검 레벨 (판매 후 항상 0)
 }
+
+// newSwordAcquirePattern 새 검 획득 패턴: "새로운 검 획득: [+0] 낡은 검"
+var newSwordAcquirePattern = regexp.MustCompile(`새로운 검 획득:\s*\[\+(\d+)\]\s*(.+)`)
 
 // ExtractSaleResult 판매 결과 전체 추출
 func ExtractSaleResult(text string) *SaleResult {
 	result := &SaleResult{
-		SaleGold:    ExtractSaleGold(text),
-		CurrentGold: ExtractCurrentGold(text),
+		SaleGold:     ExtractSaleGold(text),
+		CurrentGold:  ExtractCurrentGold(text),
+		NewSwordName: "",
+		NewSwordLvl:  -1,
 	}
+
+	// 새 검 획득 정보 추출
+	if match := newSwordAcquirePattern.FindStringSubmatch(text); len(match) >= 3 {
+		result.NewSwordLvl, _ = strconv.Atoi(match[1])
+		result.NewSwordName = strings.TrimSpace(match[2])
+	}
+
 	// 둘 다 -1이면 nil 반환
 	if result.SaleGold == -1 && result.CurrentGold == -1 {
 		return nil
@@ -644,6 +660,12 @@ func ParseBattleResult(text string, myName string) *BattleResult {
 	return result
 }
 
+// DetectBattleLimit 배틀 횟수 제한 도달 여부 확인
+// 하루 10회 배틀 제한에 도달하면 true 반환
+func DetectBattleLimit(text string) bool {
+	return battleLimitPattern.MatchString(text)
+}
+
 // FindTargetsInRanking 랭킹에서 역배 타겟 찾기
 func FindTargetsInRanking(entries []RankingEntry, myLevel int, levelDiff int) []RankingEntry {
 	var targets []RankingEntry
@@ -658,6 +680,22 @@ func FindTargetsInRanking(entries []RankingEntry, myLevel int, levelDiff int) []
 	}
 
 	return targets
+}
+
+// ExtractUsernamesFromRanking 랭킹에서 모든 유저 이름 추출 (중복 제거)
+// 강화 랭킹과 배틀 랭킹 모두에서 유저 이름을 수집
+func ExtractUsernamesFromRanking(entries []RankingEntry) []string {
+	seen := make(map[string]bool)
+	var usernames []string
+
+	for _, entry := range entries {
+		if entry.Username != "" && !seen[entry.Username] {
+			seen[entry.Username] = true
+			usernames = append(usernames, entry.Username)
+		}
+	}
+
+	return usernames
 }
 
 // === v2 새로운 추출 함수들 ===

@@ -4,15 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 )
 
 const (
-	gameDataEndpoint        = "https://sword-ai.stopdragon.kr/api/game-data"
-	optimalSellEndpoint     = "https://sword-ai.stopdragon.kr/api/strategy/optimal-sell-point"
-	cacheExpiry             = 1 * time.Hour
-	optimalSellCacheExpiry  = 10 * time.Minute
+	gameDataEndpoint    = "https://sword-ai.stopdragon.kr/api/game-data"
+	optimalSellEndpoint = "https://sword-ai.stopdragon.kr/api/strategy/optimal-sell-point"
 )
 
 // EnhanceRate 강화 확률 데이터 (레벨별)
@@ -67,48 +64,17 @@ type OptimalSellData struct {
 	Note              string            `json:"note"`
 }
 
-// 캐시된 게임 데이터
-var (
-	cachedData            *GameData
-	cachedAt              time.Time
-	cacheMu               sync.RWMutex
-	dataInitialized       bool
-	cachedOptimalSell     *OptimalSellData
-	cachedOptimalSellAt   time.Time
-	optimalSellMu         sync.RWMutex
-)
 
-// FetchGameData 서버에서 게임 데이터 가져오기
+// FetchGameData 서버에서 게임 데이터 가져오기 (매번 최신 데이터 요청)
 func FetchGameData() (*GameData, error) {
-	cacheMu.RLock()
-	if cachedData != nil && time.Since(cachedAt) < cacheExpiry {
-		defer cacheMu.RUnlock()
-		return cachedData, nil
-	}
-	cacheMu.RUnlock()
-
-	// 서버에서 데이터 가져오기
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(gameDataEndpoint)
 	if err != nil {
-		// 캐시가 있으면 만료되어도 사용
-		cacheMu.RLock()
-		if cachedData != nil {
-			defer cacheMu.RUnlock()
-			return cachedData, nil
-		}
-		cacheMu.RUnlock()
 		return nil, fmt.Errorf("서버 연결 실패: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		cacheMu.RLock()
-		if cachedData != nil {
-			defer cacheMu.RUnlock()
-			return cachedData, nil
-		}
-		cacheMu.RUnlock()
 		return nil, fmt.Errorf("서버 오류: %d", resp.StatusCode)
 	}
 
@@ -116,13 +82,6 @@ func FetchGameData() (*GameData, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return nil, fmt.Errorf("데이터 파싱 실패: %v", err)
 	}
-
-	// 캐시 업데이트
-	cacheMu.Lock()
-	cachedData = &data
-	cachedAt = time.Now()
-	dataInitialized = true
-	cacheMu.Unlock()
 
 	return &data, nil
 }
@@ -302,37 +261,16 @@ func CalcOptimalSellLevel(currentGold int) int {
 	return bestLevel
 }
 
-// FetchOptimalSellData 서버에서 최적 판매 시점 데이터 가져오기
+// FetchOptimalSellData 서버에서 최적 판매 시점 데이터 가져오기 (매번 최신 데이터 요청)
 func FetchOptimalSellData() (*OptimalSellData, error) {
-	optimalSellMu.RLock()
-	if cachedOptimalSell != nil && time.Since(cachedOptimalSellAt) < optimalSellCacheExpiry {
-		defer optimalSellMu.RUnlock()
-		return cachedOptimalSell, nil
-	}
-	optimalSellMu.RUnlock()
-
-	// 서버에서 데이터 가져오기
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(optimalSellEndpoint)
 	if err != nil {
-		// 캐시가 있으면 만료되어도 사용
-		optimalSellMu.RLock()
-		if cachedOptimalSell != nil {
-			defer optimalSellMu.RUnlock()
-			return cachedOptimalSell, nil
-		}
-		optimalSellMu.RUnlock()
 		return nil, fmt.Errorf("서버 연결 실패: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		optimalSellMu.RLock()
-		if cachedOptimalSell != nil {
-			defer optimalSellMu.RUnlock()
-			return cachedOptimalSell, nil
-		}
-		optimalSellMu.RUnlock()
 		return nil, fmt.Errorf("서버 오류: %d", resp.StatusCode)
 	}
 
@@ -340,12 +278,6 @@ func FetchOptimalSellData() (*OptimalSellData, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return nil, fmt.Errorf("데이터 파싱 실패: %v", err)
 	}
-
-	// 캐시 업데이트
-	optimalSellMu.Lock()
-	cachedOptimalSell = &data
-	cachedOptimalSellAt = time.Now()
-	optimalSellMu.Unlock()
 
 	return &data, nil
 }

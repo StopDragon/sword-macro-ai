@@ -145,8 +145,8 @@ func (e *Engine) RunMenu() {
 		fmt.Println("2. 특수 아이템 뽑기")
 		fmt.Println("3. 골드 채굴 (돈벌기)")
 		fmt.Println("4. 자동 배틀 (역배)")
-		fmt.Println("5. 옵션 설정")
-		fmt.Println("6. 내 프로필 분석")
+		fmt.Println("5. 내 프로필 분석")
+		fmt.Println("6. 옵션 설정")
 		fmt.Println("0. 종료")
 		fmt.Println()
 		fmt.Print("선택: ")
@@ -164,9 +164,9 @@ func (e *Engine) RunMenu() {
 		case "4":
 			e.runBattleMode(reader)
 		case "5":
-			e.showSettings(reader)
-		case "6":
 			e.showMyProfile()
+		case "6":
+			e.showSettings(reader)
 		case "0":
 			fmt.Println("프로그램을 종료합니다.")
 			return
@@ -412,6 +412,13 @@ func (e *Engine) setupAndRun() {
 		defer e.stopTimer.Stop()
 	}
 
+	// 채팅 상태 초기화 (첫 로그에 전체 이력 방지)
+	initialText := e.readChatText()
+	if initialText != "" {
+		lastChatText = initialText
+		logger.ChatText(initialText) // 로거도 초기화 (내부적으로 lastLoggedText 설정)
+	}
+
 	// 모드별 실행
 	switch e.mode {
 	case ModeEnhance:
@@ -547,38 +554,31 @@ func (e *Engine) printSessionStats() {
 }
 
 func (e *Engine) loopEnhance() {
-	// 1. 시작 전 프로필 체크
+	// 1. 시작 전 프로필 체크 (공통 헬퍼 사용)
 	overlay.UpdateStatus("⚔️ 강화 모드\n목표: +%d\n\n📋 프로필 확인 중...", e.targetLevel)
 	fmt.Println("📊 현재 검 상태 확인 중...")
 
-	e.sendCommand("/프로필")
-	profileText := e.waitForResponse(5 * time.Second)
+	profile := e.CheckProfileLevel()
 
-	if profileText != "" {
-		profile := ParseProfile(profileText)
-		if profile != nil && profile.Level >= 0 {
-			currentLevel := profile.Level
-			swordName := profile.SwordName
+	if profile.OK {
+		fmt.Printf("📋 현재 보유 검: [+%d] %s\n", profile.Level, profile.SwordName)
 
-			fmt.Printf("📋 현재 보유 검: [+%d] %s\n", currentLevel, swordName)
+		// 2. 이미 목표 달성한 경우 종료 (공통 헬퍼 사용)
+		if e.IsTargetReached(profile.Level) {
+			fmt.Printf("\n✅ 이미 목표 달성! 현재 +%d (목표: +%d)\n", profile.Level, e.targetLevel)
+			fmt.Println("💡 강화할 필요가 없습니다. 메뉴로 돌아갑니다.")
+			overlay.UpdateStatus("⚔️ 강화 불필요\n✅ 이미 +%d 보유!\n목표: +%d\n\n📋 판단: 목표 이미 달성", profile.Level, e.targetLevel)
+			time.Sleep(2 * time.Second)
+			return
+		}
 
-			// 2. 이미 목표 달성한 경우 종료
-			if currentLevel >= e.targetLevel {
-				fmt.Printf("\n✅ 이미 목표 달성! 현재 +%d (목표: +%d)\n", currentLevel, e.targetLevel)
-				fmt.Println("💡 강화할 필요가 없습니다. 메뉴로 돌아갑니다.")
-				overlay.UpdateStatus("⚔️ 강화 불필요\n✅ 이미 +%d 보유!\n목표: +%d\n\n📋 판단: 목표 이미 달성", currentLevel, e.targetLevel)
-				time.Sleep(2 * time.Second)
-				return
-			}
-
-			// 현재 레벨이 0보다 크면 기존 검으로 계속 강화
-			if currentLevel > 0 {
-				fmt.Printf("📈 현재 +%d에서 목표 +%d까지 강화를 시작합니다.\n", currentLevel, e.targetLevel)
-				overlay.UpdateStatus("⚔️ 강화 모드\n현재: +%d → 목표: +%d\n[%s]\n\n📋 판단: 기존 검 강화 계속", currentLevel, e.targetLevel, swordName)
-			} else {
-				fmt.Printf("📈 +0에서 목표 +%d까지 강화를 시작합니다.\n", e.targetLevel)
-				overlay.UpdateStatus("⚔️ 강화 모드\n현재: +0 → 목표: +%d\n\n📋 판단: 새 검 강화 시작", e.targetLevel)
-			}
+		// 현재 레벨이 0보다 크면 기존 검으로 계속 강화
+		if profile.Level > 0 {
+			fmt.Printf("📈 현재 +%d에서 목표 +%d까지 강화를 시작합니다.\n", profile.Level, e.targetLevel)
+			overlay.UpdateStatus("⚔️ 강화 모드\n현재: +%d → 목표: +%d\n[%s]\n\n📋 판단: 기존 검 강화 계속", profile.Level, e.targetLevel, profile.SwordName)
+		} else {
+			fmt.Printf("📈 +0에서 목표 +%d까지 강화를 시작합니다.\n", e.targetLevel)
+			overlay.UpdateStatus("⚔️ 강화 모드\n현재: +0 → 목표: +%d\n\n📋 판단: 새 검 강화 시작", e.targetLevel)
 		}
 	}
 
@@ -596,20 +596,20 @@ func (e *Engine) loopEnhance() {
 			continue
 		}
 
-		// 목표 달성 확인
-		if state.Level >= e.targetLevel {
-			fmt.Printf("\n🎉 목표 달성! +%d\n", state.Level)
-			logger.Info("목표 달성: +%d", state.Level)
-			overlay.UpdateStatus("⚔️ 강화 완료!\n🎉 +%d 달성!\n\n📋 판단: 목표 도달 → 완료", state.Level)
-			e.telem.RecordSword()
-			e.telem.TrySend()
+		// 목표 달성 확인 (공통 헬퍼 사용)
+		currentLevel := e.ExtractCurrentLevel(state)
+		if e.IsTargetReached(currentLevel) {
+			fmt.Printf("\n🎉 목표 달성! +%d\n", currentLevel)
+			logger.Info("목표 달성: +%d", currentLevel)
+			overlay.UpdateStatus("⚔️ 강화 완료!\n🎉 +%d 달성!\n\n📋 판단: 목표 도달 → 완료", currentLevel)
+			e.ReportSwordComplete()
 			return
 		}
 
 		// 강화 명령
-		overlay.UpdateStatus("⚔️ 강화 중\n현재: +%d → 목표: +%d\n\n📋 판단: /강화 실행", state.Level, e.targetLevel)
+		overlay.UpdateStatus("⚔️ 강화 중\n현재: +%d → 목표: +%d\n\n📋 판단: /강화 실행", currentLevel, e.targetLevel)
 		e.sendCommand("/강화")
-		delay := e.getDelayForLevel(state.Level)
+		delay := e.getDelayForLevel(currentLevel)
 		time.Sleep(delay)
 
 		// 결과 확인 및 골드 부족 체크
@@ -632,7 +632,16 @@ func (e *Engine) loopSpecial() {
 	if e.targetLevel > 0 {
 		targetStr = fmt.Sprintf("+%d까지 강화", e.targetLevel)
 	}
+	overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n목표: %s\n\n📋 프로필 확인 중...", targetStr)
+
+	// 시작 시 프로필 정보 표시 (Run()에서 이미 조회한 sessionProfile 사용)
+	// 중복 /프로필 전송 방지
+	if e.sessionProfile != nil && e.sessionProfile.SwordName != "" {
+		fmt.Printf("📋 현재 보유 검: [+%d] %s\n", e.sessionProfile.Level, e.sessionProfile.SwordName)
+	}
+
 	overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n목표: %s\n쓰레기: 0회", targetStr)
+	fmt.Println()
 
 	retryCount := 0
 	const maxRetries = 3
@@ -708,6 +717,12 @@ func (e *Engine) loopSpecial() {
 			itemName = ExtractItemName(text)
 		}
 
+		// 아이템 이름으로 타입 재판별 (ParseOCRText에서 실패한 경우 보완)
+		// state.ItemType이 "none"이면 아직 판별 안됨 → itemName으로 다시 시도
+		if state.ItemType == "none" && itemName != "" {
+			state.ItemType = DetermineItemType(itemName)
+		}
+
 		// 디버그: 아이템 타입 출력
 		fmt.Printf("  📋 감지: [%s] %s\n", state.ItemType, itemName)
 
@@ -734,16 +749,11 @@ func (e *Engine) loopSpecial() {
 
 			// 강화 목표가 있으면 강화 진행
 			if e.targetLevel > 0 {
-				// 현재 레벨 확인
-				currentLevel := 0
-				if state.ResultLevel > 0 {
-					currentLevel = state.ResultLevel
-				} else if state.Level > 0 {
-					currentLevel = state.Level
-				}
+				// 현재 레벨 확인 (공통 헬퍼 사용)
+				currentLevel := e.ExtractCurrentLevel(state)
 
-				// 이미 목표 달성했으면 완료
-				if currentLevel >= e.targetLevel {
+				// 이미 목표 달성했으면 완료 (공통 헬퍼 사용)
+				if e.IsTargetReached(currentLevel) {
 					fmt.Printf("✅ 이미 목표 달성! [%s] +%d\n", itemName, currentLevel)
 					overlay.UpdateStatus("⭐ 특수 강화 완료!\n[%s] +%d", itemName, currentLevel)
 					e.telem.TrySend()
@@ -760,14 +770,14 @@ func (e *Engine) loopSpecial() {
 					return
 				}
 
-				// 강화 진행
-				finalLevel, success := e.enhanceToTargetWithLevel(itemName)
-				if success {
-					fmt.Printf("✅ 강화 완료! [%s] +%d\n", itemName, finalLevel)
-					overlay.UpdateStatus("⭐ 특수 강화 완료!\n[%s] +%d", itemName, finalLevel)
+				// 강화 진행 (공통 헬퍼 사용)
+				result := e.EnhanceToTarget(itemName, currentLevel)
+				if result.Success {
+					fmt.Printf("✅ 강화 완료! [%s] +%d\n", itemName, result.FinalLevel)
+					overlay.UpdateStatus("⭐ 특수 강화 완료!\n[%s] +%d", itemName, result.FinalLevel)
 				} else {
-					fmt.Printf("💥 강화 중 파괴됨 (최종 레벨: +%d)\n", finalLevel)
-					overlay.UpdateStatus("💥 특수 파괴됨\n[%s] +%d", itemName, finalLevel)
+					fmt.Printf("💥 강화 중 파괴됨 (최종 레벨: +%d)\n", result.FinalLevel)
+					overlay.UpdateStatus("💥 특수 파괴됨\n[%s] +%d", itemName, result.FinalLevel)
 				}
 			}
 
@@ -775,8 +785,9 @@ func (e *Engine) loopSpecial() {
 			return
 		}
 
-		// 4. 쓰레기/일반이면 /판매로 새 아이템 받기 (v3 변경점)
-		if state.ItemType == "trash" || state.ItemType == "normal" || state.ItemType == "unknown" {
+		// 4. 쓰레기/일반/미판별이면 /판매로 새 아이템 받기 (v3 변경점)
+		// "none"도 포함: 타입 판별 실패 시 계속 강화하면 안되므로 판매 처리
+		if state.ItemType == "trash" || state.ItemType == "normal" || state.ItemType == "unknown" || state.ItemType == "none" {
 			e.telem.RecordFarmingWithItem(itemName, state.ItemType)
 			e.sessionStats.trashCount++
 			displayName := itemName
@@ -792,28 +803,76 @@ func (e *Engine) loopSpecial() {
 			continue
 		}
 
-		// 5. 알 수 없는 타입 - 안전하게 처리
-		fmt.Printf("  ❓ 알 수 없는 아이템 타입: [%s] - 다음 사이클 진행\n", state.ItemType)
-		overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n❓ 타입 불명\n다음 사이클...")
-		time.Sleep(500 * time.Millisecond)
+		// 5. 예상치 못한 타입 - 안전하게 판매 처리 (무한 강화 방지)
+		fmt.Printf("  ❓ 예상치 못한 아이템 타입: [%s] - 판매 처리\n", state.ItemType)
+		overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n❓ 타입 불명 → 판매")
+		e.sendCommand("/판매")
+		time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 	}
 }
 
 func (e *Engine) loopGoldMine() {
-	// v2: 세션 초기화
+	// v3: 세션 초기화
 	startGold := e.readCurrentGold()
 	e.telem.InitSession(startGold)
-	overlay.UpdateStatus("💰 골드 채굴 모드\n사이클: 0\n수익: 0G")
+	overlay.UpdateStatus("💰 골드 채굴 모드\n목표: +%d\n사이클: 0\n수익: 0G", e.targetLevel)
+
+	// 시작 시 프로필 체크 (공통 헬퍼 사용 - loopEnhance와 동일)
+	fmt.Println("📊 현재 검 상태 확인 중...")
+	profile := e.CheckProfileLevel()
+	if profile.OK {
+		fmt.Printf("📋 현재 보유 검: [+%d] %s\n", profile.Level, profile.SwordName)
+
+		// 이미 목표 달성한 경우 바로 판매
+		if e.IsTargetReached(profile.Level) {
+			fmt.Printf("✅ 이미 목표 달성! 현재 +%d → 바로 판매\n", profile.Level)
+			overlay.UpdateStatus("💰 골드 채굴\n✅ 이미 +%d 보유!\n💵 판매 진행", profile.Level)
+			e.sendCommand("/판매")
+			saleText := e.readChatTextWaitForChange(5 * time.Second)
+			saleResult := ExtractSaleResult(saleText)
+			if saleResult != nil && saleResult.SaleGold > 0 {
+				e.totalGold += saleResult.SaleGold
+				fmt.Printf("💰 판매 완료: +%dG\n", saleResult.SaleGold)
+			}
+		}
+	}
+	fmt.Println()
+
+	// 판매 후 +0 검 정보 추적 (다음 사이클에서 farmForGoldMine 스킵용)
+	var pendingZeroSword struct {
+		name     string
+		itemType string
+		valid    bool
+	}
 
 	for e.running {
+		if e.checkStop() {
+			return
+		}
+
 		e.cycleStartTime = time.Now()
 		e.cycleCount++
 
-		// 1. 파밍 (아이템 이름과 타입 반환)
-		overlay.UpdateStatus("💰 골드 채굴 #%d\n🔍 파밍 중...\n누적: %sG", e.cycleCount, FormatGold(e.totalGold))
-		itemName, itemType, found := e.farmForGoldMine()
+		var itemName, itemType string
+		var itemLevel int
+		var found bool
+
+		// 이전 판매로 +0 검을 받았으면 farmForGoldMine 스킵
+		if pendingZeroSword.valid {
+			itemName = pendingZeroSword.name
+			itemType = pendingZeroSword.itemType
+			itemLevel = 0
+			found = true
+			pendingZeroSword.valid = false // 사용 후 초기화
+			fmt.Printf("  📦 이전 판매로 받은 +0 검: %s → 바로 강화 시작\n", itemName)
+		} else {
+			// 1. 파밍 (아이템 이름, 타입, 레벨 반환 - 레벨 정보 추가됨)
+			overlay.UpdateStatus("💰 골드 채굴 #%d\n🔍 파밍 중...\n누적: %sG", e.cycleCount, FormatGold(e.totalGold))
+			itemName, itemType, itemLevel, found = e.farmForGoldMine()
+		}
+
 		if !found {
-			e.telem.RecordCycle(false)
+			e.ReportCycleFailed()
 			overlay.UpdateStatus("💰 골드 채굴 #%d\n❌ 파밍 실패\n누적: %sG", e.cycleCount, FormatGold(e.totalGold))
 			continue
 		}
@@ -821,66 +880,120 @@ func (e *Engine) loopGoldMine() {
 		// 아이템 타입 표시
 		typeLabel := GetItemTypeLabel(itemType)
 		if itemType == "special" {
-			fmt.Printf("🎉 특수 아이템 발견: %s\n", itemName)
+			fmt.Printf("🎉 특수 아이템 발견: %s +%d\n", itemName, itemLevel)
 		}
 
-		// 2. 강화
-		overlay.UpdateStatus("💰 골드 채굴 #%d\n⚔️ 강화 중: %s (%s)\n누적: %sG", e.cycleCount, itemName, typeLabel, FormatGold(e.totalGold))
-		cycleStartGold := e.readCurrentGold()
-		finalLevel, success := e.enhanceToTargetWithLevel(itemName)
-		if !success {
-			e.telem.RecordCycle(false)
-			continue
+		// 2. 목표 도달 확인 (공통 헬퍼 사용)
+		// 이미 목표 달성이면 강화 스킵하고 바로 판매
+		var finalLevel int
+		var enhanceCost int
+
+		// 강화 시작 전 골드 측정 (순수익 계산용)
+		goldBeforeEnhance := e.readCurrentGold()
+
+		if e.IsTargetReached(itemLevel) {
+			fmt.Printf("✅ 파밍에서 이미 목표 도달: %s +%d\n", itemName, itemLevel)
+			finalLevel = itemLevel
+			enhanceCost = 0
+		} else {
+			// 3. 강화 (공통 헬퍼 사용 - 시작 레벨 전달)
+			overlay.UpdateStatus("💰 골드 채굴 #%d\n⚔️ 강화 중: %s +%d (%s)\n목표: +%d\n누적: %sG",
+				e.cycleCount, itemName, itemLevel, typeLabel, e.targetLevel, FormatGold(e.totalGold))
+
+			result := e.EnhanceToTarget(itemName, itemLevel)
+			if !result.Success {
+				if result.Destroyed {
+					fmt.Printf("💥 강화 중 파괴: %s (최종 +%d)\n", itemName, result.FinalLevel)
+
+					// 파괴 시 새 검 정보가 있으면 다음 사이클용으로 저장
+					if result.NewSwordName != "" {
+						pendingZeroSword.name = result.NewSwordName
+						pendingZeroSword.itemType = result.NewSwordType
+						pendingZeroSword.valid = true
+						fmt.Printf("  📦 새 검 획득: [+0] %s\n", result.NewSwordName)
+					}
+				}
+				e.ReportCycleFailed()
+				continue
+			}
+			finalLevel = result.FinalLevel
+
+			// 강화 비용 계산 (음수 방지)
+			goldAfterEnhance := e.readCurrentGold()
+			if goldBeforeEnhance > 0 && goldAfterEnhance > 0 {
+				calculatedCost := goldBeforeEnhance - goldAfterEnhance
+				if calculatedCost >= 0 {
+					enhanceCost = calculatedCost
+				}
+			}
 		}
 
-		// 3. 판매 (목표 레벨 도달 시)
-		overlay.UpdateStatus("💰 골드 채굴 #%d\n💵 판매 중: %s +%d\n누적: %sG\n\n📋 판단: +%d 달성 → 판매", e.cycleCount, itemName, finalLevel, FormatGold(e.totalGold), e.targetLevel)
+		// 4. 판매 (목표 레벨 도달 시)
+		goldBeforeSale := e.readCurrentGold()
+
+		overlay.UpdateStatus("💰 골드 채굴 #%d\n💵 판매 중: %s +%d\n누적: %sG\n\n📋 판단: +%d 달성 → 판매",
+			e.cycleCount, itemName, finalLevel, FormatGold(e.totalGold), e.targetLevel)
 		e.sendCommand("/판매")
 
 		// 판매 응답 대기 및 골드 추출
 		saleText := e.readChatTextWaitForChange(5 * time.Second)
 		saleResult := ExtractSaleResult(saleText)
 
-		// 4. 사이클 통계
-		cycleTime := time.Since(e.cycleStartTime)
-		var goldEarned int
-		var currentGold int
-
+		var saleGold, currentGold int
 		if saleResult != nil {
-			// 판매 응답에서 직접 추출
+			// SaleGold가 -1이면 파싱 실패 → 0으로 처리
 			if saleResult.SaleGold > 0 {
-				goldEarned = saleResult.SaleGold
+				saleGold = saleResult.SaleGold
 			}
 			if saleResult.CurrentGold > 0 {
 				currentGold = saleResult.CurrentGold
 			}
+
+			// 새 검이 +0이면 다음 사이클에서 farmForGoldMine 스킵
+			// NewSwordLvl이 0 또는 -1(파싱실패)이고 이름이 있으면 → +0 검으로 처리
+			// (게임에서 판매 후 새 검은 항상 +0)
+			if saleResult.NewSwordName != "" {
+				pendingZeroSword.name = saleResult.NewSwordName
+				pendingZeroSword.itemType = DetermineItemType(saleResult.NewSwordName)
+				pendingZeroSword.valid = true
+			}
 		}
 
 		// 폴백: 직접 추출 실패 시 기존 방식 사용
-		if goldEarned == 0 {
+		// saleGold가 0 이하면 폴백 시도 (파싱 실패 -1 포함)
+		if saleGold <= 0 {
 			endGold := e.readCurrentGold()
-			goldEarned = endGold - cycleStartGold
-			currentGold = endGold
+			if endGold > 0 && goldBeforeSale > 0 {
+				// 정상적인 경우만 계산 (음수 방지)
+				calculatedSale := endGold - goldBeforeSale
+				if calculatedSale >= 0 {
+					saleGold = calculatedSale
+					currentGold = endGold
+				}
+			}
 		}
 
-		e.totalGold += goldEarned
+		// 5. 순수익 계산 (판매 수익 - 강화 비용)
+		netProfit := saleGold - enhanceCost
 
-		// v2 텔레메트리 기록
-		e.telem.RecordCycle(true)
-		e.telem.RecordGold(goldEarned)
-		e.telem.RecordSaleWithSword(itemName, finalLevel, goldEarned)
-		e.telem.RecordGoldChange(currentGold)
-		e.telem.TrySend()
+		// 6. 사이클 통계
+		cycleTime := time.Since(e.cycleStartTime)
+		e.totalGold += netProfit // 순수익으로 누적
 
-		// 세션 통계 업데이트
+		// v3 텔레메트리 기록 (공통 헬퍼 사용) - 서버에는 판매 수익 보고
+		e.ReportGoldMineCycle(itemName, finalLevel, saleGold, currentGold)
+
+		// 세션 통계 업데이트 - 순수익 기준
 		e.sessionStats.cycleTimeSum += cycleTime.Seconds()
-		e.sessionStats.cycleGoldSum += goldEarned
+		e.sessionStats.cycleGoldSum += netProfit
 
-		// 사이클 완료 상태 업데이트
-		overlay.UpdateStatus("💰 골드 채굴 #%d ✅\n%s +%d → %+sG\n누적: %sG", e.cycleCount, itemName, finalLevel, FormatGold(goldEarned), FormatGold(e.totalGold))
+		// 사이클 완료 상태 업데이트 - 순수익 상세 표시
+		overlay.UpdateStatus("💰 골드 채굴 #%d ✅\n%s +%d\n💵 판매: +%sG\n⚔️ 강화비: -%sG\n📊 순수익: %+sG\n\n누적: %sG",
+			e.cycleCount, itemName, finalLevel,
+			FormatGold(saleGold), FormatGold(enhanceCost), FormatGold(netProfit), FormatGold(e.totalGold))
 
-		fmt.Printf("📦 사이클 #%d: %.1f초, %+dG | 누적: %dG [%s +%d %s]\n",
-			e.cycleCount, cycleTime.Seconds(), goldEarned, e.totalGold, itemName, finalLevel, typeLabel)
+		fmt.Printf("📦 사이클 #%d: %.1f초 | 판매 +%dG - 강화 %dG = 순수익 %+dG | 누적: %dG [%s +%d %s]\n",
+			e.cycleCount, cycleTime.Seconds(), saleGold, enhanceCost, netProfit, e.totalGold, itemName, finalLevel, typeLabel)
 	}
 }
 
@@ -888,13 +1001,8 @@ func (e *Engine) loopBattle() {
 	fmt.Println()
 	fmt.Println("📊 프로필 확인 중...")
 
-	// 1. 내 프로필 확인
-	e.sendCommand("/프로필")
-	time.Sleep(2 * time.Second)
-
-	profileText := e.readOCRText()
-	e.myProfile = ParseProfile(profileText)
-
+	// 1. 내 프로필 확인 (공통 헬퍼 사용)
+	e.myProfile = e.CheckProfileFull()
 	if e.myProfile == nil || e.myProfile.Level < 0 {
 		fmt.Println("❌ 프로필을 읽을 수 없습니다. 다시 시도하세요.")
 		return
@@ -918,22 +1026,58 @@ func (e *Engine) loopBattle() {
 
 		e.cycleCount++
 
-		// 2. 랭킹에서 타겟 찾기
+		// 2. 랭킹에서 유저 목록 가져오기
 		e.sendCommand("/랭킹")
 		time.Sleep(2 * time.Second)
 
-		rankingText := e.readOCRText()
+		rankingText := e.readChatText()
 		entries := ParseRanking(rankingText)
-		targets := FindTargetsInRanking(entries, e.myProfile.Level, e.cfg.BattleLevelDiff)
+		usernames := ExtractUsernamesFromRanking(entries)
 
-		if len(targets) == 0 {
+		if len(usernames) == 0 {
+			fmt.Println("⏳ 랭킹에서 유저를 찾을 수 없음, 30초 후 재시도...")
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		// 3. 각 유저의 프로필 확인하여 적합한 타겟 찾기
+		var target *RankingEntry
+		minTarget := e.myProfile.Level + 1
+		maxTarget := e.myProfile.Level + e.cfg.BattleLevelDiff
+
+		fmt.Printf("🔍 %d명의 유저 프로필 확인 중... (타겟: +%d ~ +%d)\n", len(usernames), minTarget, maxTarget)
+
+		for _, username := range usernames {
+			if e.checkStop() {
+				return
+			}
+
+			profile := e.CheckOtherProfile(username)
+			if profile == nil || profile.Level <= 0 {
+				continue
+			}
+
+			if profile.Level >= minTarget && profile.Level <= maxTarget {
+				target = &RankingEntry{
+					Username: username,
+					Level:    profile.Level,
+				}
+				fmt.Printf("   ✅ %s: +%d (적합!)\n", username, profile.Level)
+				break
+			} else {
+				fmt.Printf("   ❌ %s: +%d (범위 외)\n", username, profile.Level)
+			}
+
+			time.Sleep(1 * time.Second) // 프로필 조회 간격
+		}
+
+		if target == nil {
 			fmt.Println("⏳ 적합한 타겟 없음, 30초 후 재시도...")
 			time.Sleep(30 * time.Second)
 			continue
 		}
 
-		// 3. 첫 번째 타겟과 배틀
-		target := targets[0]
+		// 4. 타겟과 배틀
 		levelDiff := target.Level - e.myProfile.Level
 		fmt.Printf("⚔️ #%d: %s (+%d) vs 나 (+%d) [%s]\n",
 			e.cycleCount, target.Username, target.Level, e.myProfile.Level, e.myProfile.SwordName)
@@ -943,7 +1087,15 @@ func (e *Engine) loopBattle() {
 		time.Sleep(3 * time.Second)
 
 		// 4. 결과 확인
-		resultText := e.readOCRText()
+		resultText := e.readChatText()
+
+		// 배틀 횟수 제한 확인 (하루 10회 제한)
+		if DetectBattleLimit(resultText) {
+			fmt.Println("⏰ 오늘 배틀 횟수를 모두 사용했습니다 (10회/일)")
+			overlay.UpdateStatus("⚔️ 자동 배틀\n⏰ 일일 배틀 제한 도달\n전적: %d승 %d패\n총 수익: %sG", e.battleWins, e.battleLosses, FormatGold(e.totalGold))
+			return
+		}
+
 		result := ParseBattleResult(resultText, e.myProfile.Name)
 
 		goldEarned := 0
@@ -959,42 +1111,31 @@ func (e *Engine) loopBattle() {
 			overlay.UpdateStatus("⚔️ 자동 배틀\n💔 패배...\n전적: %d승 %d패\n\n📋 판단: 역배 실패", e.battleWins, e.battleLosses)
 		}
 
-		// 5. v2 텔레메트리 기록 (검 이름 포함)
-		e.telem.RecordBattleWithSword(e.myProfile.SwordName, e.myProfile.Level, target.Level, result.Won, goldEarned)
-		e.telem.RecordGoldChange(e.readCurrentGold())
-		e.telem.TrySend()
-
-		// 6. 현재 통계 출력
-		winRate := float64(0)
-		if e.battleWins+e.battleLosses > 0 {
-			winRate = float64(e.battleWins) / float64(e.battleWins+e.battleLosses) * 100
-		}
-		fmt.Printf("   📊 전적: %d승 %d패 (%.1f%%) | 수익: %dG\n",
-			e.battleWins, e.battleLosses, winRate, e.totalGold)
-
-		// 7. 골드 체크
+		// 5. v2 텔레메트리 기록 (공통 헬퍼 사용)
 		currentGold := e.readCurrentGold()
-		if currentGold > 0 && currentGold < e.cfg.BattleMinGold {
-			fmt.Printf("⚠️ 골드 부족! (%dG < %dG) 배틀 중단\n", currentGold, e.cfg.BattleMinGold)
-			return
-		}
+		e.ReportBattleCycle(e.myProfile.SwordName, e.myProfile.Level, target.Level, result.Won, goldEarned, currentGold)
 
-		// 8. 프로필 갱신 (레벨 변동 확인)
-		e.sendCommand("/프로필")
-		time.Sleep(1 * time.Second)
-		profileText = e.readOCRText()
-		newProfile := ParseProfile(profileText)
-		if newProfile != nil && newProfile.Level > 0 {
+		// 6. 현재 통계 출력 (공통 헬퍼 사용)
+		PrintBattleStats(e.battleWins, e.battleLosses, e.totalGold)
+
+		// 7. 프로필 갱신 (공통 헬퍼 사용)
+		if newProfile := e.CheckProfileFull(); newProfile != nil && newProfile.Level > 0 {
 			e.myProfile = newProfile
 		}
 
-		// 9. 쿨다운
+		// 8. 쿨다운
 		time.Sleep(time.Duration(e.cfg.BattleCooldown * float64(time.Second)))
 	}
 }
 
 // 이전 텍스트 결과 저장 (응답 대기용)
 var lastChatText string
+
+// ResetLastChatText 마지막 채팅 텍스트 초기화 (새 응답 감지를 위해)
+// 중요한 명령어 전송 전에 호출하여 응답 대기가 제대로 작동하도록 함
+func (e *Engine) ResetLastChatText() {
+	lastChatText = ""
+}
 
 // readChatText 화면에서 텍스트 읽기 (클립보드 방식)
 // 내 메시지만 필터링하여 반환 (다른 사람 메시지 무시)
@@ -1023,17 +1164,14 @@ func (e *Engine) readChatClipboard() string {
 		fmt.Println("  ⚠️ 클립보드 텍스트 비어있음")
 	}
 
-	logger.OCR(text) // 로그는 동일한 형식 유지
+	logger.ChatText(text) // 새로운 채팅만 로깅
 	return text
 }
 
-// readOCRText 하위 호환 (기존 함수명 유지)
-func (e *Engine) readOCRText() string {
-	return e.readChatText()
-}
 
 // readChatTextWaitForChange 응답이 올 때까지 대기하며 텍스트 읽기
 // 이전 결과와 다를 때까지 최대 maxWait 동안 대기
+// 새로운 부분만 반환 (이전 텍스트와 diff)
 func (e *Engine) readChatTextWaitForChange(maxWait time.Duration) string {
 	startTime := time.Now()
 	pollInterval := 300 * time.Millisecond
@@ -1045,31 +1183,89 @@ func (e *Engine) readChatTextWaitForChange(maxWait time.Duration) string {
 			continue
 		}
 
-		// 이전 결과와 다르면 (새 응답 도착) 반환
+		// 이전 결과와 다르면 (새 응답 도착) 새 부분만 반환
 		if !isSameTextResult(text, lastChatText) {
+			newLines := extractNewChatLines(lastChatText, text)
 			lastChatText = text
-			return text
+			return newLines
 		}
 
 		// 같으면 대기 후 재시도
 		time.Sleep(pollInterval)
 	}
 
-	// 타임아웃 - 마지막으로 읽은 결과 반환
+	// 타임아웃 - 마지막으로 읽은 결과에서 새 부분만 반환
 	text := e.readChatText()
-	if text != "" {
+	if text != "" && !isSameTextResult(text, lastChatText) {
+		newLines := extractNewChatLines(lastChatText, text)
 		lastChatText = text
+		return newLines
 	}
-	return text
+	return ""
 }
 
-// readOCRTextWaitForChange 하위 호환
-func (e *Engine) readOCRTextWaitForChange(maxWait time.Duration) string {
-	return e.readChatTextWaitForChange(maxWait)
+// extractNewChatLines 이전 텍스트와 비교하여 새로운 줄만 추출
+// Old: ABCDE, New: ABCDEABFG → 반환: ABFG
+func extractNewChatLines(oldText, newText string) string {
+	if oldText == "" {
+		return newText
+	}
+
+	if oldText == newText {
+		return ""
+	}
+
+	oldLines := strings.Split(oldText, "\n")
+	newLines := strings.Split(newText, "\n")
+
+	// 방법 1: oldLines가 newLines의 앞부분과 일치하는지 확인 (채팅 추가 케이스)
+	matchCount := 0
+	for i := 0; i < len(oldLines) && i < len(newLines); i++ {
+		if strings.TrimSpace(oldLines[i]) == strings.TrimSpace(newLines[i]) {
+			matchCount++
+		} else {
+			break
+		}
+	}
+
+	// 전체 또는 대부분 일치하면 나머지 반환
+	if matchCount == len(oldLines) && matchCount < len(newLines) {
+		return strings.Join(newLines[matchCount:], "\n")
+	}
+
+	// 방법 2: 채팅이 스크롤되어 oldLines의 뒷부분만 newLines 앞에 남은 경우
+	// oldLines의 suffix가 newLines의 prefix와 일치하는지 확인
+	for suffixStart := 1; suffixStart < len(oldLines); suffixStart++ {
+		suffix := oldLines[suffixStart:]
+		if len(suffix) <= len(newLines) && chatLinesMatch(suffix, newLines[:len(suffix)]) {
+			// suffix 이후의 새 내용 반환
+			if len(suffix) < len(newLines) {
+				return strings.Join(newLines[len(suffix):], "\n")
+			}
+			return ""
+		}
+	}
+
+	// 일치하는 부분 없음 - 전체가 새 내용
+	return newText
+}
+
+// chatLinesMatch 두 줄 배열이 동일한지 비교
+func chatLinesMatch(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if strings.TrimSpace(a[i]) != strings.TrimSpace(b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // waitForResponse 플레이봇 응답 대기 (최대 maxWait 동안)
 // 명령어 전송 후 응답이 올 때까지 대기
+// 새로운 부분만 반환
 func (e *Engine) waitForResponse(maxWait time.Duration) string {
 	startTime := time.Now()
 	pollInterval := 500 * time.Millisecond
@@ -1085,10 +1281,11 @@ func (e *Engine) waitForResponse(maxWait time.Duration) string {
 			continue
 		}
 
-		// 이전 결과와 다르면 새 응답
+		// 이전 결과와 다르면 새 부분만 반환
 		if !isSameTextResult(text, lastChatText) {
+			newLines := extractNewChatLines(lastChatText, text)
 			lastChatText = text
-			return text
+			return newLines
 		}
 
 		time.Sleep(pollInterval)
@@ -1184,13 +1381,14 @@ func (e *Engine) farmUntilSpecial() bool {
 
 // farmForGoldMine 골드 채굴 모드용 파밍 - 모든 아이템 타입 반환 (파괴하지 않음)
 // 로직: /판매 시도 → 판매 불가면 현재 아이템 유지 → 아이템 정보 반환
-func (e *Engine) farmForGoldMine() (string, string, bool) {
+// 반환값: (itemName, itemType, itemLevel, found)
+func (e *Engine) farmForGoldMine() (string, string, int, bool) {
 	retryCount := 0
 	const maxRetries = 3
 
 	for e.running {
 		if e.checkStop() {
-			return "", "", false
+			return "", "", 0, false
 		}
 
 		// 1. /판매 시도 (현재 검 팔고 새 검 받기)
@@ -1239,16 +1437,14 @@ func (e *Engine) farmForGoldMine() (string, string, bool) {
 						continue
 					}
 
-					// 성공 또는 유지 시 현재 레벨 반환
-					currentLevel := 1 // 0강에서 강화 성공하면 1강
-					if enhanceState.ResultLevel > 0 {
-						currentLevel = enhanceState.ResultLevel
-					} else if enhanceState.LastResult == "hold" {
-						currentLevel = 0
+					// 성공 또는 유지 시 현재 레벨 반환 (공통 헬퍼 사용)
+					currentLevel := e.ExtractCurrentLevel(enhanceState)
+					if currentLevel == 0 && enhanceState.LastResult != "hold" {
+						currentLevel = 1 // 0강에서 강화 성공하면 최소 1강
 					}
 
 					fmt.Printf("  📦 0강 아이템 강화: %s → +%d\n", itemName, currentLevel)
-					return itemName, itemType, true
+					return itemName, itemType, currentLevel, true
 				}
 				continue
 			}
@@ -1283,21 +1479,24 @@ func (e *Engine) farmForGoldMine() (string, string, bool) {
 		}
 		itemType := state.ItemType
 
+		// 현재 레벨 추출 (공통 헬퍼 사용) - 새 검은 0강
+		currentLevel := e.ExtractCurrentLevel(state)
+
 		// 텔레메트리 기록
 		e.telem.RecordFarmingWithItem(itemName, itemType)
 
 		// 아이템 타입별 통계 기록
 		if itemType == "special" {
 			e.sessionStats.specialCount++
-			fmt.Printf("🎉 특수 아이템! [%s]\n", itemName)
+			fmt.Printf("🎉 특수 아이템! [%s] +%d\n", itemName, currentLevel)
 		} else {
 			e.sessionStats.trashCount++
 		}
 
-		// 모든 아이템 타입 반환 (골드 채굴은 아이템 가리지 않음)
-		return itemName, itemType, true
+		// 모든 아이템 타입 반환 (골드 채굴은 아이템 가리지 않음) + 레벨 포함
+		return itemName, itemType, currentLevel, true
 	}
-	return "", "", false
+	return "", "", 0, false
 }
 
 // farmUntilSpecialWithName 특수 아이템을 찾을 때까지 파밍하고 아이템 이름 반환
@@ -1734,6 +1933,13 @@ func (e *Engine) showMyProfile() {
 	fmt.Println("시작!")
 	fmt.Println()
 
+	// 채팅 상태 초기화 (로그에 전체 이력 방지)
+	initialText := e.readChatText()
+	if initialText != "" {
+		lastChatText = initialText
+		logger.ChatText(initialText)
+	}
+
 	// /프로필 명령어 전송
 	fmt.Println("📤 /프로필 명령어 전송 중...")
 	overlay.UpdateStatus("📤 /프로필 전송 중...")
@@ -1811,91 +2017,13 @@ func (e *Engine) showMyProfile() {
 	fmt.Println()
 
 	// 3. 강화 확률표
-	fmt.Println("📊 강화 확률 (현재 레벨 기준)")
-	fmt.Println("   레벨  | 성공  | 유지  | 파괴  | 예상 판매가")
-	fmt.Println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-	// 현재 레벨부터 +20까지 표시
-	rates := GetAllEnhanceRates()
-	for lvl := profile.Level; lvl <= 20 && rates != nil && lvl < len(rates); lvl++ {
-		rate := GetEnhanceRate(lvl)
-		if rate == nil {
-			continue
-		}
-		nextPrice := GetSwordPrice(lvl + 1)
-		priceStr := "-"
-		if nextPrice != nil {
-			priceStr = FormatGold(nextPrice.AvgPrice)
-		}
-
-		marker := "  "
-		if lvl == profile.Level {
-			marker = "▶ "
-		}
-
-		fmt.Printf("   %s+%d→+%d | %4.0f%% | %4.0f%% | %4.0f%% | %s\n",
-			marker, lvl, lvl+1, rate.SuccessRate, rate.KeepRate, rate.DestroyRate, priceStr)
-	}
-	fmt.Println()
+	PrintEnhanceRateTable(profile.Level)
 
 	// 4. 목표별 성공 확률
-	fmt.Println("🎯 목표 달성 확률")
-	targets := []int{profile.Level + 1, profile.Level + 2, profile.Level + 3, 10, 12, 15, 20}
-	shown := make(map[int]bool)
-
-	for _, target := range targets {
-		if target <= profile.Level || target > 20 || shown[target] {
-			continue
-		}
-		shown[target] = true
-
-		chance := CalcEnhanceSuccessChance(profile.Level, target)
-		trials := CalcExpectedTrials(profile.Level, target)
-		targetPrice := GetSwordPrice(target)
-
-		priceStr := ""
-		if targetPrice != nil {
-			priceStr = fmt.Sprintf(" (판매가: %sG)", FormatGold(targetPrice.AvgPrice))
-		}
-
-		fmt.Printf("   +%d → +%d: %.2f%% (평균 %.0f회 시도)%s\n",
-			profile.Level, target, chance, trials, priceStr)
-	}
-	fmt.Println()
+	PrintTargetSuccessChance(profile.Level)
 
 	// 5. 역배 기대값
-	fmt.Printf("⚡ 역배 분석 (내 레벨: +%d)\n", profile.Level)
-	fmt.Println("   레벨차 | 승률  | 평균보상 | 기대값")
-	fmt.Println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-	betAmount := 100 // 기본 배팅 금액 가정
-	if profile.Gold > 0 {
-		betAmount = profile.Gold / 10 // 보유 골드의 10%를 배팅으로 가정
-		if betAmount < 100 {
-			betAmount = 100
-		}
-	}
-
-	for diff := 1; diff <= 3; diff++ {
-		reward := GetBattleReward(diff)
-		if reward == nil {
-			continue
-		}
-
-		ev, winRate, avgReward := CalcUpsetExpectedValue(profile.Level, profile.Level+diff, betAmount)
-
-		evStr := fmt.Sprintf("%+.0fG", ev)
-		if ev > 0 {
-			evStr = "🟢 " + evStr
-		} else if ev < 0 {
-			evStr = "🔴 " + evStr
-		}
-
-		fmt.Printf("   +%d     | %4.0f%% | %6sG | %s\n",
-			diff, winRate, FormatGold(avgReward), evStr)
-	}
-	fmt.Println()
-	fmt.Printf("   💡 배팅 기준: %sG (보유 골드의 10%%)\n", FormatGold(betAmount))
+	PrintUpsetAnalysis(profile.Level, profile.Gold)
 
 	fmt.Println()
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

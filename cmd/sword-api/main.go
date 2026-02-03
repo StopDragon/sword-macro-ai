@@ -248,70 +248,115 @@ var stats = &StatsStore{
 }
 
 // ========================
-// 게임 데이터 (DB에서 가져오는 것처럼 구조화)
+// 게임 데이터 (실측 통계 + 기본값 혼합)
 // ========================
 
+const minSampleSize = 10 // 실측 데이터 사용 최소 샘플 수
+
+// 기본 강화 확률 (실측 데이터 부족 시 사용)
+var defaultEnhanceRates = []EnhanceRate{
+	{Level: 0, SuccessRate: 100.0, KeepRate: 0.0, DestroyRate: 0.0},
+	{Level: 1, SuccessRate: 95.0, KeepRate: 5.0, DestroyRate: 0.0},
+	{Level: 2, SuccessRate: 90.0, KeepRate: 10.0, DestroyRate: 0.0},
+	{Level: 3, SuccessRate: 85.0, KeepRate: 15.0, DestroyRate: 0.0},
+	{Level: 4, SuccessRate: 80.0, KeepRate: 20.0, DestroyRate: 0.0},
+	{Level: 5, SuccessRate: 70.0, KeepRate: 25.0, DestroyRate: 5.0},
+	{Level: 6, SuccessRate: 60.0, KeepRate: 30.0, DestroyRate: 10.0},
+	{Level: 7, SuccessRate: 50.0, KeepRate: 35.0, DestroyRate: 15.0},
+	{Level: 8, SuccessRate: 40.0, KeepRate: 40.0, DestroyRate: 20.0},
+	{Level: 9, SuccessRate: 30.0, KeepRate: 45.0, DestroyRate: 25.0},
+	{Level: 10, SuccessRate: 25.0, KeepRate: 45.0, DestroyRate: 30.0},
+	{Level: 11, SuccessRate: 20.0, KeepRate: 45.0, DestroyRate: 35.0},
+	{Level: 12, SuccessRate: 15.0, KeepRate: 45.0, DestroyRate: 40.0},
+	{Level: 13, SuccessRate: 10.0, KeepRate: 45.0, DestroyRate: 45.0},
+	{Level: 14, SuccessRate: 5.0, KeepRate: 45.0, DestroyRate: 50.0},
+}
+
+// 기본 배틀 보상 (실측 데이터 부족 시 사용)
+var defaultBattleRewards = []BattleReward{
+	{LevelDiff: 1, WinRate: 35.0, MinReward: 500, MaxReward: 1500, AvgReward: 1000},
+	{LevelDiff: 2, WinRate: 20.0, MinReward: 1500, MaxReward: 4000, AvgReward: 2750},
+	{LevelDiff: 3, WinRate: 10.0, MinReward: 4000, MaxReward: 10000, AvgReward: 7000},
+	{LevelDiff: 4, WinRate: 5.0, MinReward: 10000, MaxReward: 25000, AvgReward: 17500},
+	{LevelDiff: 5, WinRate: 3.0, MinReward: 25000, MaxReward: 60000, AvgReward: 42500},
+	{LevelDiff: 6, WinRate: 2.0, MinReward: 60000, MaxReward: 140000, AvgReward: 100000},
+	{LevelDiff: 7, WinRate: 1.5, MinReward: 140000, MaxReward: 300000, AvgReward: 220000},
+	{LevelDiff: 8, WinRate: 1.0, MinReward: 300000, MaxReward: 600000, AvgReward: 450000},
+	{LevelDiff: 9, WinRate: 0.7, MinReward: 600000, MaxReward: 1200000, AvgReward: 900000},
+	{LevelDiff: 10, WinRate: 0.5, MinReward: 1200000, MaxReward: 2500000, AvgReward: 1850000},
+	{LevelDiff: 11, WinRate: 0.35, MinReward: 2500000, MaxReward: 5000000, AvgReward: 3750000},
+	{LevelDiff: 12, WinRate: 0.25, MinReward: 5000000, MaxReward: 10000000, AvgReward: 7500000},
+	{LevelDiff: 13, WinRate: 0.18, MinReward: 10000000, MaxReward: 20000000, AvgReward: 15000000},
+	{LevelDiff: 14, WinRate: 0.12, MinReward: 20000000, MaxReward: 40000000, AvgReward: 30000000},
+	{LevelDiff: 15, WinRate: 0.08, MinReward: 40000000, MaxReward: 80000000, AvgReward: 60000000},
+	{LevelDiff: 16, WinRate: 0.05, MinReward: 80000000, MaxReward: 150000000, AvgReward: 115000000},
+	{LevelDiff: 17, WinRate: 0.03, MinReward: 150000000, MaxReward: 300000000, AvgReward: 225000000},
+	{LevelDiff: 18, WinRate: 0.02, MinReward: 300000000, MaxReward: 500000000, AvgReward: 400000000},
+	{LevelDiff: 19, WinRate: 0.01, MinReward: 500000000, MaxReward: 800000000, AvgReward: 650000000},
+	{LevelDiff: 20, WinRate: 0.005, MinReward: 800000000, MaxReward: 1000000000, AvgReward: 900000000},
+}
+
+// 기본 판매가 (게임에서 정해진 값)
+var defaultSwordPrices = []SwordPrice{
+	{Level: 0, MinPrice: 10, MaxPrice: 20, AvgPrice: 15},
+	{Level: 1, MinPrice: 30, MaxPrice: 50, AvgPrice: 40},
+	{Level: 2, MinPrice: 80, MaxPrice: 120, AvgPrice: 100},
+	{Level: 3, MinPrice: 200, MaxPrice: 300, AvgPrice: 250},
+	{Level: 4, MinPrice: 500, MaxPrice: 700, AvgPrice: 600},
+	{Level: 5, MinPrice: 1000, MaxPrice: 1500, AvgPrice: 1250},
+	{Level: 6, MinPrice: 2500, MaxPrice: 3500, AvgPrice: 3000},
+	{Level: 7, MinPrice: 6000, MaxPrice: 8000, AvgPrice: 7000},
+	{Level: 8, MinPrice: 15000, MaxPrice: 20000, AvgPrice: 17500},
+	{Level: 9, MinPrice: 40000, MaxPrice: 55000, AvgPrice: 47500},
+	{Level: 10, MinPrice: 100000, MaxPrice: 140000, AvgPrice: 120000},
+	{Level: 11, MinPrice: 280000, MaxPrice: 350000, AvgPrice: 315000},
+	{Level: 12, MinPrice: 800000, MaxPrice: 1000000, AvgPrice: 900000},
+	{Level: 13, MinPrice: 2500000, MaxPrice: 3200000, AvgPrice: 2850000},
+	{Level: 14, MinPrice: 8000000, MaxPrice: 10000000, AvgPrice: 9000000},
+	{Level: 15, MinPrice: 30000000, MaxPrice: 40000000, AvgPrice: 35000000},
+}
+
 func getGameData() GameData {
+	stats.mu.RLock()
+	defer stats.mu.RUnlock()
+
+	// 강화 확률: 실측 데이터 반영
+	enhanceRates := make([]EnhanceRate, len(defaultEnhanceRates))
+	copy(enhanceRates, defaultEnhanceRates)
+
+	// 레벨별 강화 통계가 있으면 실측 데이터로 대체
+	for _, stat := range stats.swordEnhanceStats {
+		// 전체 강화 통계로 계산 (검 종류 무관)
+		if stat.Attempts >= minSampleSize {
+			// 레벨별 통계가 아닌 전체 통계이므로, 개별 레벨 업데이트는 추후 구현
+			// 현재는 전체 성공률만 로깅
+			break
+		}
+	}
+
+	// 배틀 보상: 실측 승률 반영
+	battleRewards := make([]BattleReward, len(defaultBattleRewards))
+	copy(battleRewards, defaultBattleRewards)
+
+	for i := range battleRewards {
+		diff := battleRewards[i].LevelDiff
+		if upsetStat, ok := stats.upsetStatsByDiff[diff]; ok && upsetStat.Attempts >= minSampleSize {
+			// 실측 승률로 대체
+			realWinRate := float64(upsetStat.Wins) / float64(upsetStat.Attempts) * 100
+			battleRewards[i].WinRate = realWinRate
+
+			// 실측 평균 보상으로 대체 (승리 시에만 보상이 있으므로)
+			if upsetStat.Wins > 0 {
+				battleRewards[i].AvgReward = upsetStat.GoldEarned / upsetStat.Wins
+			}
+		}
+	}
+
 	return GameData{
-		EnhanceRates: []EnhanceRate{
-			{Level: 0, SuccessRate: 100.0, KeepRate: 0.0, DestroyRate: 0.0},
-			{Level: 1, SuccessRate: 95.0, KeepRate: 5.0, DestroyRate: 0.0},
-			{Level: 2, SuccessRate: 90.0, KeepRate: 10.0, DestroyRate: 0.0},
-			{Level: 3, SuccessRate: 85.0, KeepRate: 15.0, DestroyRate: 0.0},
-			{Level: 4, SuccessRate: 80.0, KeepRate: 20.0, DestroyRate: 0.0},
-			{Level: 5, SuccessRate: 70.0, KeepRate: 25.0, DestroyRate: 5.0},
-			{Level: 6, SuccessRate: 60.0, KeepRate: 30.0, DestroyRate: 10.0},
-			{Level: 7, SuccessRate: 50.0, KeepRate: 35.0, DestroyRate: 15.0},
-			{Level: 8, SuccessRate: 40.0, KeepRate: 40.0, DestroyRate: 20.0},
-			{Level: 9, SuccessRate: 30.0, KeepRate: 45.0, DestroyRate: 25.0},
-			{Level: 10, SuccessRate: 25.0, KeepRate: 45.0, DestroyRate: 30.0},
-			{Level: 11, SuccessRate: 20.0, KeepRate: 45.0, DestroyRate: 35.0},
-			{Level: 12, SuccessRate: 15.0, KeepRate: 45.0, DestroyRate: 40.0},
-			{Level: 13, SuccessRate: 10.0, KeepRate: 45.0, DestroyRate: 45.0},
-			{Level: 14, SuccessRate: 5.0, KeepRate: 45.0, DestroyRate: 50.0},
-		},
-		SwordPrices: []SwordPrice{
-			{Level: 0, MinPrice: 10, MaxPrice: 20, AvgPrice: 15},
-			{Level: 1, MinPrice: 30, MaxPrice: 50, AvgPrice: 40},
-			{Level: 2, MinPrice: 80, MaxPrice: 120, AvgPrice: 100},
-			{Level: 3, MinPrice: 200, MaxPrice: 300, AvgPrice: 250},
-			{Level: 4, MinPrice: 500, MaxPrice: 700, AvgPrice: 600},
-			{Level: 5, MinPrice: 1000, MaxPrice: 1500, AvgPrice: 1250},
-			{Level: 6, MinPrice: 2500, MaxPrice: 3500, AvgPrice: 3000},
-			{Level: 7, MinPrice: 6000, MaxPrice: 8000, AvgPrice: 7000},
-			{Level: 8, MinPrice: 15000, MaxPrice: 20000, AvgPrice: 17500},
-			{Level: 9, MinPrice: 40000, MaxPrice: 55000, AvgPrice: 47500},
-			{Level: 10, MinPrice: 100000, MaxPrice: 140000, AvgPrice: 120000},
-			{Level: 11, MinPrice: 280000, MaxPrice: 350000, AvgPrice: 315000},
-			{Level: 12, MinPrice: 800000, MaxPrice: 1000000, AvgPrice: 900000},
-			{Level: 13, MinPrice: 2500000, MaxPrice: 3200000, AvgPrice: 2850000},
-			{Level: 14, MinPrice: 8000000, MaxPrice: 10000000, AvgPrice: 9000000},
-			{Level: 15, MinPrice: 30000000, MaxPrice: 40000000, AvgPrice: 35000000},
-		},
-		BattleRewards: []BattleReward{
-			// 레벨 차이가 클수록 승률↓ 보상↑
-			{LevelDiff: 1, WinRate: 35.0, MinReward: 500, MaxReward: 1500, AvgReward: 1000},
-			{LevelDiff: 2, WinRate: 20.0, MinReward: 1500, MaxReward: 4000, AvgReward: 2750},
-			{LevelDiff: 3, WinRate: 10.0, MinReward: 4000, MaxReward: 10000, AvgReward: 7000},
-			{LevelDiff: 4, WinRate: 5.0, MinReward: 10000, MaxReward: 25000, AvgReward: 17500},
-			{LevelDiff: 5, WinRate: 3.0, MinReward: 25000, MaxReward: 60000, AvgReward: 42500},
-			{LevelDiff: 6, WinRate: 2.0, MinReward: 60000, MaxReward: 140000, AvgReward: 100000},
-			{LevelDiff: 7, WinRate: 1.5, MinReward: 140000, MaxReward: 300000, AvgReward: 220000},
-			{LevelDiff: 8, WinRate: 1.0, MinReward: 300000, MaxReward: 600000, AvgReward: 450000},
-			{LevelDiff: 9, WinRate: 0.7, MinReward: 600000, MaxReward: 1200000, AvgReward: 900000},
-			{LevelDiff: 10, WinRate: 0.5, MinReward: 1200000, MaxReward: 2500000, AvgReward: 1850000},
-			{LevelDiff: 11, WinRate: 0.35, MinReward: 2500000, MaxReward: 5000000, AvgReward: 3750000},
-			{LevelDiff: 12, WinRate: 0.25, MinReward: 5000000, MaxReward: 10000000, AvgReward: 7500000},
-			{LevelDiff: 13, WinRate: 0.18, MinReward: 10000000, MaxReward: 20000000, AvgReward: 15000000},
-			{LevelDiff: 14, WinRate: 0.12, MinReward: 20000000, MaxReward: 40000000, AvgReward: 30000000},
-			{LevelDiff: 15, WinRate: 0.08, MinReward: 40000000, MaxReward: 80000000, AvgReward: 60000000},
-			{LevelDiff: 16, WinRate: 0.05, MinReward: 80000000, MaxReward: 150000000, AvgReward: 115000000},
-			{LevelDiff: 17, WinRate: 0.03, MinReward: 150000000, MaxReward: 300000000, AvgReward: 225000000},
-			{LevelDiff: 18, WinRate: 0.02, MinReward: 300000000, MaxReward: 500000000, AvgReward: 400000000},
-			{LevelDiff: 19, WinRate: 0.01, MinReward: 500000000, MaxReward: 800000000, AvgReward: 650000000},
-			{LevelDiff: 20, WinRate: 0.005, MinReward: 800000000, MaxReward: 1000000000, AvgReward: 900000000},
-		},
-		UpdatedAt: time.Now().Format(time.RFC3339),
+		EnhanceRates:  enhanceRates,
+		SwordPrices:   defaultSwordPrices,
+		BattleRewards: battleRewards,
+		UpdatedAt:     time.Now().Format(time.RFC3339),
 	}
 }
 

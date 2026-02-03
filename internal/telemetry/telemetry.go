@@ -22,7 +22,7 @@ const (
 	stateFile        = ".telemetry_state.json"
 	schemaVer        = 2 // v2: 검 종류별 통계, 특수 이름별 통계, 세션 통계 추가
 	sendTimeout      = 5 * time.Second
-	sendInterval     = 5 * time.Minute
+	sendInterval     = 3 * time.Minute
 	defaultAppSecret = "sw0rd-m4cr0-2026-s3cr3t-k3y" // 환경변수 없을 때 기본값
 	appSecretEnvVar  = "SWORD_APP_SECRET"
 )
@@ -77,6 +77,7 @@ type ItemFarmingStat struct {
 	TotalCount   int `json:"total_count"`   // 총 획득 횟수
 	SpecialCount int `json:"special_count"` // 특수로 획득한 횟수
 	NormalCount  int `json:"normal_count"`  // 일반으로 획득한 횟수
+	TrashCount   int `json:"trash_count"`   // 쓰레기로 획득한 횟수
 }
 
 // Stats 수집 통계
@@ -483,6 +484,8 @@ func (t *Telemetry) RecordFarmingWithItem(itemName string, itemType string) {
 		stat.TotalCount++
 		if itemType == "special" {
 			stat.SpecialCount++
+		} else if itemType == "trash" {
+			stat.TrashCount++
 		} else {
 			stat.NormalCount++
 		}
@@ -580,7 +583,7 @@ func (t *Telemetry) RecordProfile(username string, level int, gold int) {
 	logger.Debug("프로필 기록: %s, +%d, %dG", username, level, gold)
 }
 
-// TrySend 5분 간격으로 서버에 전송 시도
+// TrySend 3분 간격으로 서버에 전송 시도
 func (t *Telemetry) TrySend() {
 	t.mu.Lock()
 
@@ -589,7 +592,7 @@ func (t *Telemetry) TrySend() {
 		return
 	}
 
-	// 5분 경과 확인
+	// 3분 경과 확인
 	if time.Since(t.lastSentTime) < sendInterval {
 		t.mu.Unlock()
 		return
