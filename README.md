@@ -241,14 +241,31 @@ print(f"G/h: {total_gold / total_hours:,.0f}")
 
 ## 다운로드 (빌드된 앱)
 
-**[GitHub Releases](../../releases)** 에서 빌드된 앱을 다운로드할 수 있습니다.
+Python 설치 없이 바로 사용할 수 있는 빌드된 앱입니다.
 
-| 플랫폼 | 파일 | 비고 |
-|--------|------|------|
-| macOS | `SwordMacro-macOS.dmg` | 시스템 설정 > 접근성 권한 필요 |
-| Windows | `SwordMacro-Windows.zip` | 첫 실행 시 OCR 모델 다운로드 (~200MB) |
+### 다운로드 방법
+1. **[Releases 페이지](../../releases)** 로 이동
+2. 최신 버전에서 본인 OS에 맞는 파일 다운로드
+   - macOS: `SwordMacro-macOS.dmg`
+   - Windows: `SwordMacro-Windows.zip`
 
-### 직접 빌드하기
+### macOS 설치 방법
+1. `SwordMacro-macOS.dmg` 다운로드
+2. DMG 파일 더블클릭 → `SwordMacro.app`을 `Applications` 폴더로 드래그
+3. 첫 실행 시 **"확인되지 않은 개발자"** 경고가 뜨면:
+   - `SwordMacro.app` 우클릭 → **열기** 클릭 → **열기** 버튼 클릭
+4. **접근성 권한 허용** (필수):
+   - 시스템 설정 > 개인정보 보호 및 보안 > 접근성
+   - `SwordMacro` 체크박스 활성화
+
+### Windows 설치 방법
+1. `SwordMacro-Windows.zip` 다운로드
+2. 압축 해제 → `SwordMacro` 폴더 생성됨
+3. 폴더 안의 `SwordMacro.exe` 실행
+4. **첫 실행 시** 한국어 OCR 모델 자동 다운로드 (~200MB, 1회만)
+5. Windows Defender 경고 시: **추가 정보** → **실행** 클릭
+
+### 직접 빌드하기 (개발자용)
 
 ```bash
 # 가상환경 생성 및 의존성 설치
