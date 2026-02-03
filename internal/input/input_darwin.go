@@ -106,10 +106,11 @@ func typeText(text string) {
 
 	// 클립보드에 복사
 	C.setClipboard(cText)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	// Cmd+V (붙여넣기)
 	C.pressKey(C.int(keyCodeV), C.int(flagCommand))
+	time.Sleep(100 * time.Millisecond) // 붙여넣기 완료 대기
 }
 
 func pressEnter() {

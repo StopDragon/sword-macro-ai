@@ -31,10 +31,11 @@ func PressEnter() {
 // SendCommand 게임 명령어 전송 (클릭 + 텍스트 + 엔터)
 func SendCommand(x, y int, command string) {
 	Click(x, y)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 	TypeText(command)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond) // 붙여넣기 완료 대기
 	PressEnter()
+	time.Sleep(100 * time.Millisecond) // 엔터 처리 대기
 }
 
 // CheckFailsafe 비상 정지 체크 (화면 좌상단)

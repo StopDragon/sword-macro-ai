@@ -1,4 +1,4 @@
-// +build darwin
+//go:build darwin
 
 package overlay
 
@@ -7,15 +7,25 @@ package overlay
 #cgo LDFLAGS: -framework Cocoa -framework QuartzCore
 
 #import <Cocoa/Cocoa.h>
+#include <stdlib.h>
 
 static NSWindow *ocrWindow = nil;
 static NSWindow *inputWindow = nil;
 static NSWindow *statusWindow = nil;
 static NSTextField *statusLabel = nil;
+static BOOL appInitialized = NO;
+
+// Run loop pump - CLI 앱에서 Cocoa 이벤트 처리
+void PumpRunLoop() {
+    @autoreleasepool {
+        NSDate *future = [NSDate dateWithTimeIntervalSinceNow:0.1];
+        [[NSRunLoop currentRunLoop] runUntilDate:future];
+    }
+}
 
 // OCR 영역 오버레이 (빨간색)
 void ShowOCRRegion(int x, int y, int width, int height) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    @autoreleasepool {
         if (ocrWindow != nil) {
             [ocrWindow close];
             ocrWindow = nil;
@@ -29,26 +39,26 @@ void ShowOCRRegion(int x, int y, int width, int height) {
             backing:NSBackingStoreBuffered
             defer:NO];
 
-        [ocrWindow setLevel:NSFloatingWindowLevel];
+        [ocrWindow setLevel:NSScreenSaverWindowLevel];
         [ocrWindow setBackgroundColor:[NSColor clearColor]];
         [ocrWindow setOpaque:NO];
         [ocrWindow setIgnoresMouseEvents:YES];
-        [ocrWindow setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces];
+        [ocrWindow setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary];
 
         NSView *contentView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
         contentView.wantsLayer = YES;
         contentView.layer.borderColor = [[NSColor redColor] CGColor];
-        contentView.layer.borderWidth = 2.0;
-        contentView.layer.backgroundColor = [[NSColor colorWithRed:1.0 green:0.0 blue:0.0 alpha:0.05] CGColor];
+        contentView.layer.borderWidth = 3.0;
+        contentView.layer.backgroundColor = [[NSColor colorWithRed:1.0 green:0.0 blue:0.0 alpha:0.1] CGColor];
 
         [ocrWindow setContentView:contentView];
-        [ocrWindow makeKeyAndOrderFront:nil];
-    });
+        [ocrWindow orderFrontRegardless];
+    }
 }
 
 // 입력창 영역 오버레이 (초록색)
 void ShowInputRegion(int x, int y, int width, int height) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    @autoreleasepool {
         if (inputWindow != nil) {
             [inputWindow close];
             inputWindow = nil;
@@ -62,26 +72,26 @@ void ShowInputRegion(int x, int y, int width, int height) {
             backing:NSBackingStoreBuffered
             defer:NO];
 
-        [inputWindow setLevel:NSFloatingWindowLevel];
+        [inputWindow setLevel:NSScreenSaverWindowLevel];
         [inputWindow setBackgroundColor:[NSColor clearColor]];
         [inputWindow setOpaque:NO];
         [inputWindow setIgnoresMouseEvents:YES];
-        [inputWindow setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces];
+        [inputWindow setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary];
 
         NSView *contentView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
         contentView.wantsLayer = YES;
         contentView.layer.borderColor = [[NSColor greenColor] CGColor];
-        contentView.layer.borderWidth = 2.0;
-        contentView.layer.backgroundColor = [[NSColor colorWithRed:0.0 green:1.0 blue:0.0 alpha:0.05] CGColor];
+        contentView.layer.borderWidth = 3.0;
+        contentView.layer.backgroundColor = [[NSColor colorWithRed:0.0 green:1.0 blue:0.0 alpha:0.1] CGColor];
 
         [inputWindow setContentView:contentView];
-        [inputWindow makeKeyAndOrderFront:nil];
-    });
+        [inputWindow orderFrontRegardless];
+    }
 }
 
 // 상태 패널 (우측 하단)
 void ShowStatusPanel(int x, int y, int width, int height) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    @autoreleasepool {
         if (statusWindow != nil) {
             [statusWindow close];
             statusWindow = nil;
@@ -96,11 +106,11 @@ void ShowStatusPanel(int x, int y, int width, int height) {
             backing:NSBackingStoreBuffered
             defer:NO];
 
-        [statusWindow setLevel:NSFloatingWindowLevel];
-        [statusWindow setBackgroundColor:[NSColor colorWithRed:0.0 green:0.0 blue:0.0 alpha:0.8]];
+        [statusWindow setLevel:NSScreenSaverWindowLevel];
+        [statusWindow setBackgroundColor:[NSColor colorWithRed:0.1 green:0.1 blue:0.1 alpha:0.9]];
         [statusWindow setOpaque:NO];
         [statusWindow setIgnoresMouseEvents:YES];
-        [statusWindow setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces];
+        [statusWindow setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary];
 
         statusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(10, 10, width - 20, height - 20)];
         [statusLabel setBezeled:NO];
@@ -108,27 +118,28 @@ void ShowStatusPanel(int x, int y, int width, int height) {
         [statusLabel setEditable:NO];
         [statusLabel setSelectable:NO];
         [statusLabel setTextColor:[NSColor whiteColor]];
-        [statusLabel setFont:[NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular]];
+        [statusLabel setFont:[NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightMedium]];
         [statusLabel setStringValue:@"🎮 대기 중..."];
 
         [[statusWindow contentView] addSubview:statusLabel];
-        [statusWindow makeKeyAndOrderFront:nil];
-    });
+        [statusWindow orderFrontRegardless];
+    }
 }
 
 // 상태 텍스트 업데이트
 void UpdateStatus(const char *text) {
-    NSString *nsText = [NSString stringWithUTF8String:text];
-    dispatch_async(dispatch_get_main_queue(), ^{
+    @autoreleasepool {
         if (statusLabel != nil) {
+            NSString *nsText = [NSString stringWithUTF8String:text];
             [statusLabel setStringValue:nsText];
+            [statusWindow display];
         }
-    });
+    }
 }
 
 // 모든 오버레이 숨기기
 void HideAllOverlays() {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    @autoreleasepool {
         if (ocrWindow != nil) {
             [ocrWindow close];
             ocrWindow = nil;
@@ -142,20 +153,24 @@ void HideAllOverlays() {
             statusWindow = nil;
             statusLabel = nil;
         }
-    });
+    }
 }
 
 void InitApp() {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [NSApplication sharedApplication];
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
-    });
+    @autoreleasepool {
+        if (!appInitialized) {
+            [NSApplication sharedApplication];
+            [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+            appInitialized = YES;
+        }
+    }
 }
 */
 import "C"
 import (
 	"fmt"
 	"time"
+	"unsafe"
 )
 
 var initialized = false
@@ -164,9 +179,15 @@ var initialized = false
 func Init() {
 	if !initialized {
 		C.InitApp()
-		time.Sleep(100 * time.Millisecond)
+		C.PumpRunLoop()
+		time.Sleep(50 * time.Millisecond)
 		initialized = true
 	}
+}
+
+// pumpEvents Cocoa 이벤트 루프 처리
+func pumpEvents() {
+	C.PumpRunLoop()
 }
 
 // Show OCR 캡처 영역 오버레이 표시 (하위 호환)
@@ -185,6 +206,7 @@ func ShowOCRRegion(x, y, width, height int) {
 		Init()
 	}
 	C.ShowOCRRegion(C.int(x), C.int(y), C.int(width), C.int(height))
+	pumpEvents()
 }
 
 // ShowInputRegion 입력창 영역 표시 (초록색)
@@ -193,6 +215,7 @@ func ShowInputRegion(x, y, width, height int) {
 		Init()
 	}
 	C.ShowInputRegion(C.int(x), C.int(y), C.int(width), C.int(height))
+	pumpEvents()
 }
 
 // ShowStatusPanel 상태 패널 표시
@@ -201,6 +224,7 @@ func ShowStatusPanel(x, y, width, height int) {
 		Init()
 	}
 	C.ShowStatusPanel(C.int(x), C.int(y), C.int(width), C.int(height))
+	pumpEvents()
 }
 
 // ShowAll 모든 오버레이 표시 (OCR 영역, 입력창 영역, 상태 패널)
@@ -210,28 +234,37 @@ func ShowAll(ocrX, ocrY, ocrW, ocrH, inputX, inputY, inputW, inputH int) {
 	}
 
 	// OCR 영역 (빨간색)
-	ShowOCRRegion(ocrX, ocrY, ocrW, ocrH)
+	C.ShowOCRRegion(C.int(ocrX), C.int(ocrY), C.int(ocrW), C.int(ocrH))
 
 	// 입력창 영역 (초록색)
-	ShowInputRegion(inputX, inputY, inputW, inputH)
+	C.ShowInputRegion(C.int(inputX), C.int(inputY), C.int(inputW), C.int(inputH))
 
 	// 상태 패널 (OCR 영역 오른쪽)
 	statusX := ocrX + ocrW + 10
 	statusY := ocrY
 	statusW := 280
 	statusH := 150
-	ShowStatusPanel(statusX, statusY, statusW, statusH)
+	C.ShowStatusPanel(C.int(statusX), C.int(statusY), C.int(statusW), C.int(statusH))
+
+	// 이벤트 처리
+	pumpEvents()
+	time.Sleep(100 * time.Millisecond)
+	pumpEvents()
 }
 
 // UpdateStatus 상태 텍스트 업데이트
 func UpdateStatus(format string, args ...interface{}) {
 	text := fmt.Sprintf(format, args...)
-	C.UpdateStatus(C.CString(text))
+	cText := C.CString(text)
+	C.UpdateStatus(cText)
+	C.free(unsafe.Pointer(cText))
+	pumpEvents()
 }
 
 // HideAll 모든 오버레이 숨기기
 func HideAll() {
 	C.HideAllOverlays()
+	pumpEvents()
 }
 
 // ShowForDuration 지정 시간 동안 오버레이 표시
