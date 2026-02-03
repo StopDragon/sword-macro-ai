@@ -198,24 +198,37 @@ func (e *Engine) setupAndRun() {
 		fmt.Printf("좌표 저장됨: (%d, %d)\n", e.cfg.ClickX, e.cfg.ClickY)
 	}
 
-	// OCR 캡처 영역 표시
+	// OCR 캡처 영역 및 입력창 영역 계산
 	captureX := e.cfg.ClickX - e.cfg.CaptureW/2
 	captureY := e.cfg.ClickY - e.cfg.InputBoxH/2 - e.cfg.CaptureH
+	inputX := e.cfg.ClickX - 150 // 입력창 너비 추정
+	inputY := e.cfg.ClickY - e.cfg.InputBoxH/2
+	inputW := 300
+	inputH := e.cfg.InputBoxH
+
 	fmt.Println()
-	fmt.Println("🔴 빨간색 테두리가 OCR 캡처 영역입니다!")
-	overlay.Show(captureX, captureY, e.cfg.CaptureW, e.cfg.CaptureH)
-	fmt.Printf("   위치: (%d, %d) ~ (%d, %d)\n", captureX, captureY, captureX+e.cfg.CaptureW, captureY+e.cfg.CaptureH)
-	fmt.Println("⚠️  카카오톡 채팅창을 빨간 테두리 안에 맞춰 배치하세요!")
+	fmt.Println("🔴 빨간 테두리 = OCR 캡처 영역 (채팅 내용)")
+	fmt.Println("🟢 초록 테두리 = 입력창 영역 (명령어 입력)")
+	fmt.Printf("   OCR: (%d, %d) ~ (%d, %d)\n", captureX, captureY, captureX+e.cfg.CaptureW, captureY+e.cfg.CaptureH)
+	fmt.Printf("   입력: (%d, %d) ~ (%d, %d)\n", inputX, inputY, inputX+inputW, inputY+inputH)
+
+	// 모든 오버레이 표시 (OCR 영역 + 입력창 영역 + 상태 패널)
+	overlay.ShowAll(captureX, captureY, e.cfg.CaptureW, e.cfg.CaptureH, inputX, inputY, inputW, inputH)
+	overlay.UpdateStatus("🎮 준비 중...\n카카오톡 창을\n오버레이에 맞춰주세요")
+
+	fmt.Println()
+	fmt.Println("⚠️  카카오톡 채팅창을 오버레이에 맞춰 배치하세요!")
 	fmt.Println()
 
 	// 5초 대기
 	fmt.Print("⏳ 준비 대기: ")
 	for i := 5; i > 0; i-- {
 		fmt.Printf("%d... ", i)
+		overlay.UpdateStatus("🎮 준비 중... %d초\n카카오톡 창을\n오버레이에 맞춰주세요", i)
 		time.Sleep(1 * time.Second)
 	}
 	fmt.Println("시작!")
-	overlay.Hide()
+	overlay.UpdateStatus("🚀 시작!")
 
 	// OCR 초기화
 	fmt.Println("OCR 엔진 초기화 중...")
@@ -264,6 +277,11 @@ func (e *Engine) setupAndRun() {
 	case ModeBattle:
 		e.loopBattle()
 	}
+
+	// 종료 시 오버레이 숨기기
+	overlay.UpdateStatus("⏹️ 종료 중...")
+	time.Sleep(500 * time.Millisecond)
+	overlay.HideAll()
 
 	// 종료 시 통계 출력 및 텔레메트리 전송
 	elapsed := time.Since(e.startTime)
@@ -368,19 +386,23 @@ func (e *Engine) loopGoldMine() {
 	// v2: 세션 초기화
 	startGold := e.readCurrentGold()
 	e.telem.InitSession(startGold)
+	overlay.UpdateStatus("💰 골드 채굴 모드\n사이클: 0\n수익: 0G")
 
 	for e.running {
 		e.cycleStartTime = time.Now()
 		e.cycleCount++
 
 		// 1. 파밍 (아이템 이름 반환)
+		overlay.UpdateStatus("💰 골드 채굴 #%d\n🔍 파밍 중...\n누적: %sG", e.cycleCount, FormatGold(e.totalGold))
 		itemName, found := e.farmUntilHiddenWithName()
 		if !found {
 			e.telem.RecordCycle(false)
+			overlay.UpdateStatus("💰 골드 채굴 #%d\n❌ 파밍 실패\n누적: %sG", e.cycleCount, FormatGold(e.totalGold))
 			continue
 		}
 
 		// 2. 강화
+		overlay.UpdateStatus("💰 골드 채굴 #%d\n⚔️ 강화 중: %s\n누적: %sG", e.cycleCount, itemName, FormatGold(e.totalGold))
 		cycleStartGold := e.readCurrentGold()
 		finalLevel, success := e.enhanceToTargetWithLevel()
 		if !success {
@@ -389,6 +411,7 @@ func (e *Engine) loopGoldMine() {
 		}
 
 		// 3. 판매
+		overlay.UpdateStatus("💰 골드 채굴 #%d\n💵 판매 중: %s +%d\n누적: %sG", e.cycleCount, itemName, finalLevel, FormatGold(e.totalGold))
 		e.sendCommand("/판매")
 		time.Sleep(500 * time.Millisecond)
 
@@ -404,6 +427,9 @@ func (e *Engine) loopGoldMine() {
 		e.telem.RecordSaleWithSword(itemName, finalLevel, goldEarned)
 		e.telem.RecordGoldChange(endGold)
 		e.telem.TrySend()
+
+		// 사이클 완료 상태 업데이트
+		overlay.UpdateStatus("💰 골드 채굴 #%d ✅\n%s +%d → %+sG\n누적: %sG", e.cycleCount, itemName, finalLevel, FormatGold(goldEarned), FormatGold(e.totalGold))
 
 		fmt.Printf("📦 사이클 #%d: %.1f초, %+dG | 누적: %dG [%s +%d]\n",
 			e.cycleCount, cycleTime.Seconds(), goldEarned, e.totalGold, itemName, finalLevel)
