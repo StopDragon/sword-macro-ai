@@ -2,10 +2,7 @@ package game
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -88,7 +85,7 @@ func (e *Engine) RunMenu() {
 		fmt.Println("3. 골드 채굴 (돈벌기)")
 		fmt.Println("4. 자동 배틀 (역배)")
 		fmt.Println("5. 옵션 설정")
-		fmt.Println("6. 커뮤니티 통계")
+		fmt.Println("6. 내 프로필 분석")
 		fmt.Println("0. 종료")
 		fmt.Println()
 		fmt.Print("선택: ")
@@ -108,7 +105,7 @@ func (e *Engine) RunMenu() {
 		case "5":
 			e.showSettings(reader)
 		case "6":
-			e.showCommunityStats()
+			e.showMyProfile()
 		case "0":
 			fmt.Println("프로그램을 종료합니다.")
 			return
@@ -707,77 +704,156 @@ func (e *Engine) showSettings(reader *bufio.Reader) {
 	}
 }
 
-func (e *Engine) showCommunityStats() {
+func (e *Engine) showMyProfile() {
 	fmt.Println()
-	fmt.Println("=== 커뮤니티 통계 ===")
-	fmt.Println("서버에서 데이터를 가져오는 중...")
+	fmt.Println("=== 내 프로필 분석 ===")
+	fmt.Println("카카오톡에서 /프로필을 입력하고")
+	fmt.Println("메시지 입력창에 마우스를 올려놓으세요...")
+	fmt.Println("3초 후 프로필을 읽습니다.")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get("https://sword-ai.stopdragon.kr/api/stats/detailed")
-	if err != nil {
-		fmt.Printf("❌ 서버 연결 실패: %v\n", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("❌ 서버 오류: %d\n", resp.StatusCode)
-		return
+	// 좌표 설정
+	if !e.cfg.LockXY || e.cfg.ClickX == 0 {
+		time.Sleep(3 * time.Second)
+		e.cfg.ClickX, e.cfg.ClickY = input.GetMousePos()
+		e.cfg.Save()
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Printf("❌ 데이터 읽기 실패: %v\n", err)
+	// OCR 초기화
+	if err := ocr.Init(); err != nil {
+		fmt.Printf("❌ OCR 초기화 실패: %v\n", err)
 		return
 	}
 
-	var stats map[string]interface{}
-	if err := json.Unmarshal(body, &stats); err != nil {
-		fmt.Printf("❌ 데이터 파싱 실패: %v\n", err)
+	// /프로필 명령어 전송
+	e.sendCommand("/프로필")
+	time.Sleep(2 * time.Second)
+
+	// OCR로 프로필 읽기
+	profileText := e.readOCRText()
+	profile := ParseProfile(profileText)
+
+	if profile == nil || profile.Level < 0 {
+		fmt.Println("❌ 프로필을 읽을 수 없습니다.")
+		fmt.Println("   카카오톡 창이 보이는지 확인하세요.")
 		return
 	}
 
 	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-	// 강화 통계
-	if enhance, ok := stats["강화"].(map[string]interface{}); ok {
-		fmt.Println("📈 강화 통계")
-		fmt.Printf("   총 시도: %v회\n", enhance["총_시도"])
-		fmt.Printf("   성공률: %v | 유지율: %v | 파괴율: %v\n",
-			enhance["성공률"], enhance["유지율"], enhance["파괴율"])
-		if byLevel, ok := enhance["레벨별_성공"].(map[string]interface{}); ok && len(byLevel) > 0 {
-			fmt.Print("   레벨별 성공: ")
-			for k, v := range byLevel {
-				fmt.Printf("%s=%v ", k, v)
-			}
-			fmt.Println()
+	// 1. 내 검 정보
+	fmt.Println("⚔️ 내 검 정보")
+	fmt.Printf("   이름: %s\n", profile.Name)
+	if profile.SwordName != "" {
+		fmt.Printf("   보유 검: [+%d] %s\n", profile.Level, profile.SwordName)
+	} else {
+		fmt.Printf("   보유 검: +%d\n", profile.Level)
+	}
+	fmt.Printf("   전적: %d승 %d패\n", profile.Wins, profile.Losses)
+	if profile.Gold > 0 {
+		fmt.Printf("   보유 골드: %sG\n", FormatGold(profile.Gold))
+	}
+	fmt.Println()
+
+	// 2. 예상 판매가
+	fmt.Println("💰 예상 판매가")
+	price := GetSwordPrice(profile.Level)
+	if price != nil {
+		fmt.Printf("   최소: %sG\n", FormatGold(price.MinPrice))
+		fmt.Printf("   평균: %sG\n", FormatGold(price.AvgPrice))
+		fmt.Printf("   최대: %sG\n", FormatGold(price.MaxPrice))
+	} else {
+		fmt.Println("   데이터 없음")
+	}
+	fmt.Println()
+
+	// 3. 강화 확률표
+	fmt.Println("📊 강화 확률 (현재 레벨 기준)")
+	fmt.Println("   레벨  | 성공  | 유지  | 파괴  | 예상 판매가")
+	fmt.Println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	// 현재 레벨부터 +15까지 표시
+	rates := GetAllEnhanceRates()
+	for lvl := profile.Level; lvl <= 15 && rates != nil && lvl < len(rates); lvl++ {
+		rate := GetEnhanceRate(lvl)
+		if rate == nil {
+			continue
 		}
-		fmt.Println()
+		nextPrice := GetSwordPrice(lvl + 1)
+		priceStr := "-"
+		if nextPrice != nil {
+			priceStr = FormatGold(nextPrice.AvgPrice)
+		}
+
+		marker := "  "
+		if lvl == profile.Level {
+			marker = "▶ "
+		}
+
+		fmt.Printf("   %s+%d→+%d | %4.0f%% | %4.0f%% | %4.0f%% | %s\n",
+			marker, lvl, lvl+1, rate.SuccessRate, rate.KeepRate, rate.DestroyRate, priceStr)
+	}
+	fmt.Println()
+
+	// 4. 목표별 성공 확률
+	fmt.Println("🎯 목표 달성 확률")
+	targets := []int{profile.Level + 1, profile.Level + 2, profile.Level + 3, 10, 12, 15}
+	shown := make(map[int]bool)
+
+	for _, target := range targets {
+		if target <= profile.Level || target > 15 || shown[target] {
+			continue
+		}
+		shown[target] = true
+
+		chance := CalcEnhanceSuccessChance(profile.Level, target)
+		trials := CalcExpectedTrials(profile.Level, target)
+		targetPrice := GetSwordPrice(target)
+
+		priceStr := ""
+		if targetPrice != nil {
+			priceStr = fmt.Sprintf(" (판매가: %sG)", FormatGold(targetPrice.AvgPrice))
+		}
+
+		fmt.Printf("   +%d → +%d: %.2f%% (평균 %.0f회 시도)%s\n",
+			profile.Level, target, chance, trials, priceStr)
+	}
+	fmt.Println()
+
+	// 5. 역배 기대값
+	fmt.Printf("⚡ 역배 분석 (내 레벨: +%d)\n", profile.Level)
+	fmt.Println("   레벨차 | 승률  | 평균보상 | 기대값")
+	fmt.Println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	betAmount := 100 // 기본 배팅 금액 가정
+	if profile.Gold > 0 {
+		betAmount = profile.Gold / 10 // 보유 골드의 10%를 배팅으로 가정
+		if betAmount < 100 {
+			betAmount = 100
+		}
 	}
 
-	// 배틀 통계
-	if battle, ok := stats["배틀"].(map[string]interface{}); ok {
-		fmt.Println("⚔️ 배틀 통계")
-		fmt.Printf("   총 대결: %v회 | 승률: %v\n", battle["총_대결"], battle["승률"])
-		fmt.Printf("   역배 시도: %v회 | 역배 승률: %v\n", battle["역배_시도"], battle["역배_승률"])
-		fmt.Printf("   총 전리품: %v | 평균: %v\n", battle["총_전리품"], battle["평균_전리품"])
-		fmt.Println()
-	}
+	for diff := 1; diff <= 3; diff++ {
+		reward := GetBattleReward(diff)
+		if reward == nil {
+			continue
+		}
 
-	// 파밍 통계
-	if farming, ok := stats["파밍"].(map[string]interface{}); ok {
-		fmt.Println("🎣 파밍 통계")
-		fmt.Printf("   총 시도: %v회 | 히든 확률: %v\n", farming["총_시도"], farming["히든_확률"])
-		fmt.Println()
-	}
+		ev, winRate, avgReward := CalcUpsetExpectedValue(profile.Level, profile.Level+diff, betAmount)
 
-	// 판매 통계
-	if sales, ok := stats["판매"].(map[string]interface{}); ok {
-		fmt.Println("💰 판매 통계")
-		fmt.Printf("   총 판매: %v회 | 총 수익: %v\n", sales["총_판매"], sales["총_수익"])
-		fmt.Printf("   평균 가격: %v\n", sales["평균_가격"])
-		fmt.Println()
-	}
+		evStr := fmt.Sprintf("%+.0fG", ev)
+		if ev > 0 {
+			evStr = "🟢 " + evStr
+		} else if ev < 0 {
+			evStr = "🔴 " + evStr
+		}
 
-	fmt.Println("💡 이 통계는 모든 사용자의 익명 데이터를 집계한 결과입니다.")
+		fmt.Printf("   +%d     | %4.0f%% | %6sG | %s\n",
+			diff, winRate, FormatGold(avgReward), evStr)
+	}
+	fmt.Println()
+	fmt.Printf("   💡 배팅 기준: %sG (보유 골드의 10%%)\n", FormatGold(betAmount))
+
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 }

@@ -1,9 +1,11 @@
 # Makefile for sword-macro-ai
 
 APP_NAME := SwordMacro
+API_NAME := SwordAPI
 VERSION := 2.0.0
 BUILD_DIR := build
 CMD_DIR := cmd/sword-macro
+API_DIR := cmd/sword-api
 
 # Go 설정
 GO := go
@@ -14,7 +16,7 @@ DARWIN_AMD64 := GOOS=darwin GOARCH=amd64
 DARWIN_ARM64 := GOOS=darwin GOARCH=arm64
 WINDOWS_AMD64 := GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc
 
-.PHONY: all clean build-mac build-mac-arm64 build-windows deps
+.PHONY: all clean build-mac build-mac-arm64 build-windows build-api deps
 
 all: clean deps build-mac
 
@@ -62,9 +64,28 @@ build-windows:
 	$(WINDOWS_AMD64) $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(APP_NAME).exe ./$(CMD_DIR)
 	@echo "✅ 빌드 완료: $(BUILD_DIR)/$(APP_NAME).exe"
 
-# 개발용 실행
+# API 서버 빌드
+build-api:
+	@echo "🔨 API 서버 빌드 중..."
+	@mkdir -p $(BUILD_DIR)
+	$(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(API_NAME) ./$(API_DIR)
+	@echo "✅ 빌드 완료: $(BUILD_DIR)/$(API_NAME)"
+	@ls -lh $(BUILD_DIR)/$(API_NAME)
+
+# API 서버 빌드 (Linux - Docker/서버용)
+build-api-linux:
+	@echo "🔨 API 서버 Linux 빌드 중..."
+	@mkdir -p $(BUILD_DIR)
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(API_NAME)-linux ./$(API_DIR)
+	@echo "✅ 빌드 완료: $(BUILD_DIR)/$(API_NAME)-linux"
+
+# 개발용 실행 (클라이언트)
 run:
 	$(GO) run ./$(CMD_DIR)
+
+# API 서버 실행
+run-api:
+	$(GO) run ./$(API_DIR)
 
 # 테스트
 test:
@@ -84,10 +105,19 @@ size:
 # 도움말
 help:
 	@echo "사용법:"
+	@echo ""
+	@echo "  📦 클라이언트 (매크로)"
 	@echo "  make deps          - 의존성 설치"
 	@echo "  make build-mac     - macOS 빌드 (현재 아키텍처)"
 	@echo "  make build-mac-universal - macOS Universal Binary"
 	@echo "  make build-windows - Windows 빌드 (크로스 컴파일)"
 	@echo "  make run           - 개발 모드 실행"
+	@echo ""
+	@echo "  🌐 API 서버"
+	@echo "  make build-api     - API 서버 빌드"
+	@echo "  make build-api-linux - API 서버 Linux 빌드"
+	@echo "  make run-api       - API 서버 실행"
+	@echo ""
+	@echo "  🛠️  기타"
 	@echo "  make clean         - 빌드 정리"
 	@echo "  make size          - 빌드 크기 확인"

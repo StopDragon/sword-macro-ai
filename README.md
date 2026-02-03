@@ -36,6 +36,8 @@
 | 강화 목표 달성 | 설정한 레벨까지 자동 강화 |
 | 히든 검 뽑기 | 히든 아이템 발견까지 파밍 |
 | 골드 채굴 | 파밍 → 강화 → 판매 무한 반복 |
+| 자동 배틀 (역배) | 높은 레벨 상대와 자동 대결 |
+| 내 프로필 분석 | 검 정보, 판매가, 강화확률, 역배 기대값 분석 |
 
 **조작**: F8 일시정지, F9 재시작, 마우스 좌상단 = 비상정지
 
@@ -63,12 +65,34 @@
 git clone https://github.com/StopDragon/sword-macro-ai.git
 cd sword-macro-ai
 
+# 클라이언트 (매크로)
 make build-mac           # macOS
 make build-mac-universal # macOS Universal (Intel + Apple Silicon)
 make build-windows       # Windows
+
+# API 서버
+make build-api           # 현재 OS용
+make build-api-linux     # Linux (서버 배포용)
 ```
 
 **요구사항**: Go 1.21+, macOS 12+ / Windows 10+
+
+## API 서버
+
+게임 데이터(강화 확률, 판매가, 역배 보상)를 제공하는 API 서버입니다.
+
+```bash
+# 로컬 실행
+make run-api
+
+# 또는
+PORT=8080 go run ./cmd/sword-api
+```
+
+**엔드포인트**:
+- `GET /api/game-data` - 게임 데이터 조회
+- `POST /api/telemetry` - 텔레메트리 수신
+- `GET /api/stats/detailed` - 커뮤니티 통계
 
 ## 기술
 
