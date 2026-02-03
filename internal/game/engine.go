@@ -514,6 +514,9 @@ func (e *Engine) printSessionStats() {
 }
 
 func (e *Engine) loopEnhance() {
+	// 초기 상태 표시
+	overlay.UpdateStatus("⚔️ 강화 모드\n목표: +%d\n\n📋 상태 확인 중...", e.targetLevel)
+
 	for e.running {
 		if e.checkStop() {
 			return
@@ -530,12 +533,14 @@ func (e *Engine) loopEnhance() {
 		if state.Level >= e.targetLevel {
 			fmt.Printf("\n🎉 목표 달성! +%d\n", state.Level)
 			logger.Info("목표 달성: +%d", state.Level)
+			overlay.UpdateStatus("⚔️ 강화 완료!\n🎉 +%d 달성!\n\n📋 판단: 목표 도달 → 완료", state.Level)
 			e.telem.RecordSword()
 			e.telem.TrySend()
 			return
 		}
 
 		// 강화 명령
+		overlay.UpdateStatus("⚔️ 강화 중\n현재: +%d → 목표: +%d\n\n📋 판단: /강화 실행", state.Level, e.targetLevel)
 		e.sendCommand("/강화")
 		delay := e.getDelayForLevel(state.Level)
 		time.Sleep(delay)
@@ -545,6 +550,8 @@ func (e *Engine) loopEnhance() {
 		if text != "" {
 			goldInfo := DetectInsufficientGold(text)
 			if goldInfo.IsInsufficient {
+				overlay.UpdateStatus("⚔️ 강화 중단\n💰 골드 부족!\n필요: %s\n보유: %s",
+					FormatGold(goldInfo.Required), FormatGold(goldInfo.Current))
 				e.handleInsufficientGold(goldInfo)
 				return
 			}
