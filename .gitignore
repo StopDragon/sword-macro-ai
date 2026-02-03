@@ -1,0 +1,14 @@
+# Claude Code / OMC
+.claude/
+.omc/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 런타임 생성 파일
+sword_config.json
+sword_macro.log
+sword_macro.log.bak
+sword_data.csv

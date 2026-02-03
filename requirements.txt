@@ -1,0 +1,13 @@
+# 공통 의존성
+pyautogui
+pyperclip
+pynput
+mss
+Pillow
+
+# macOS 전용 (Vision Framework OCR + Quartz 화면 캡처)
+pyobjc-framework-Vision; sys_platform == "darwin"
+pyobjc-framework-Quartz; sys_platform == "darwin"
+
+# Windows/Linux 전용 (EasyOCR - 한국어+영어)
+easyocr; sys_platform != "darwin"
