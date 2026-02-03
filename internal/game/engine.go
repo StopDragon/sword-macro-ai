@@ -15,6 +15,7 @@ import (
 	"github.com/StopDragon/sword-macro-ai/internal/input"
 	"github.com/StopDragon/sword-macro-ai/internal/logger"
 	"github.com/StopDragon/sword-macro-ai/internal/ocr"
+	"github.com/StopDragon/sword-macro-ai/internal/overlay"
 	"github.com/StopDragon/sword-macro-ai/internal/telemetry"
 )
 
@@ -196,6 +197,25 @@ func (e *Engine) setupAndRun() {
 
 		fmt.Printf("좌표 저장됨: (%d, %d)\n", e.cfg.ClickX, e.cfg.ClickY)
 	}
+
+	// OCR 캡처 영역 표시
+	captureX := e.cfg.ClickX - e.cfg.CaptureW/2
+	captureY := e.cfg.ClickY - e.cfg.InputBoxH/2 - e.cfg.CaptureH
+	fmt.Println()
+	fmt.Println("🔴 빨간색 테두리가 OCR 캡처 영역입니다!")
+	overlay.Show(captureX, captureY, e.cfg.CaptureW, e.cfg.CaptureH)
+	fmt.Printf("   위치: (%d, %d) ~ (%d, %d)\n", captureX, captureY, captureX+e.cfg.CaptureW, captureY+e.cfg.CaptureH)
+	fmt.Println("⚠️  카카오톡 채팅창을 빨간 테두리 안에 맞춰 배치하세요!")
+	fmt.Println()
+
+	// 5초 대기
+	fmt.Print("⏳ 준비 대기: ")
+	for i := 5; i > 0; i-- {
+		fmt.Printf("%d... ", i)
+		time.Sleep(1 * time.Second)
+	}
+	fmt.Println("시작!")
+	overlay.Hide()
 
 	// OCR 초기화
 	fmt.Println("OCR 엔진 초기화 중...")
@@ -795,8 +815,13 @@ func (e *Engine) showMyProfile() {
 	fmt.Printf("│  크기: %d x %d                         \n", e.cfg.CaptureW, e.cfg.CaptureH)
 	fmt.Println("└─────────────────────────────────────────┘")
 	fmt.Println()
-	fmt.Println("⚠️  카카오톡 채팅창을 위 영역에 맞춰 배치하세요!")
-	fmt.Println("    (프로필 응답이 OCR 영역 안에 보여야 합니다)")
+
+	// 오버레이 표시
+	fmt.Println("🔴 빨간색 테두리가 OCR 캡처 영역입니다!")
+	overlay.Show(captureX, captureY, e.cfg.CaptureW, e.cfg.CaptureH)
+
+	fmt.Println("⚠️  카카오톡 채팅창을 빨간 테두리 안에 맞춰 배치하세요!")
+	fmt.Println("    (프로필 응답이 빨간 영역 안에 보여야 합니다)")
 	fmt.Println()
 
 	// 5초 대기 (사용자가 카톡 창을 OCR 영역으로 이동할 시간)
@@ -807,6 +832,9 @@ func (e *Engine) showMyProfile() {
 	}
 	fmt.Println("시작!")
 	fmt.Println()
+
+	// 오버레이 숨기기
+	overlay.Hide()
 
 	// OCR 초기화
 	fmt.Println("🔧 OCR 엔진 초기화 중...")
