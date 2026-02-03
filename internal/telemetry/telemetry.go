@@ -20,7 +20,7 @@ import (
 const (
 	endpoint         = "https://sword-ai.stopdragon.kr/api/telemetry"
 	stateFile        = ".telemetry_state.json"
-	schemaVer        = 2 // v2: 검 종류별 통계, 히든 이름별 통계, 세션 통계 추가
+	schemaVer        = 2 // v2: 검 종류별 통계, 특수 이름별 통계, 세션 통계 추가
 	sendTimeout      = 5 * time.Second
 	sendInterval     = 5 * time.Minute
 	defaultAppSecret = "sw0rd-m4cr0-2026-s3cr3t-k3y" // 환경변수 없을 때 기본값
@@ -74,9 +74,9 @@ type SessionStats struct {
 
 // ItemFarmingStat 아이템별 파밍 통계
 type ItemFarmingStat struct {
-	TotalCount  int `json:"total_count"`  // 총 획득 횟수
-	HiddenCount int `json:"hidden_count"` // 히든으로 획득한 횟수
-	NormalCount int `json:"normal_count"` // 일반으로 획득한 횟수
+	TotalCount   int `json:"total_count"`   // 총 획득 횟수
+	SpecialCount int `json:"special_count"` // 특수로 획득한 횟수
+	NormalCount  int `json:"normal_count"`  // 일반으로 획득한 횟수
 }
 
 // Stats 수집 통계
@@ -111,18 +111,18 @@ type Stats struct {
 
 	// 파밍 통계
 	FarmingAttempts int `json:"farming_attempts"`
-	HiddenFound     int `json:"hidden_found"`
-	TrashFound      int `json:"trash_found"`
+	SpecialFound    int `json:"special_found"` // 특수 아이템 발견 횟수
+	TrashFound      int `json:"trash_found"`   // 쓰레기 아이템 발견 횟수
 
 	// === v2 새로 추가 ===
 
 	// 검 종류별 배틀 통계: "불꽃검" -> SwordBattleStat
 	SwordBattleStats map[string]*SwordBattleStat `json:"sword_battle_stats,omitempty"`
 
-	// 히든 검 발견 통계: "용검" -> 3
-	HiddenFoundByName map[string]int `json:"hidden_found_by_name,omitempty"`
+	// 특수 아이템 발견 통계: "용검" -> 3
+	SpecialFoundByName map[string]int `json:"special_found_by_name,omitempty"`
 
-	// 모든 아이템 파밍 통계: "불꽃검" -> {count: 5, hidden: 1}
+	// 모든 아이템 파밍 통계: "불꽃검" -> {count: 5, special: 1}
 	ItemFarmingStats map[string]*ItemFarmingStat `json:"item_farming_stats,omitempty"`
 
 	// 레벨차별 역배 통계: 1 -> UpsetStat, 2 -> UpsetStat, 3 -> UpsetStat
@@ -342,7 +342,7 @@ func (t *Telemetry) RecordSale(level int, price int) {
 }
 
 // RecordFarming 파밍 결과 기록
-func (t *Telemetry) RecordFarming(isHidden bool) {
+func (t *Telemetry) RecordFarming(isSpecial bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.enabled {
@@ -350,8 +350,8 @@ func (t *Telemetry) RecordFarming(isHidden bool) {
 	}
 
 	t.stats.FarmingAttempts++
-	if isHidden {
-		t.stats.HiddenFound++
+	if isSpecial {
+		t.stats.SpecialFound++
 	} else {
 		t.stats.TrashFound++
 	}
@@ -424,8 +424,8 @@ func (t *Telemetry) RecordBattleWithSword(swordName string, myLevel, oppLevel in
 	}
 }
 
-// RecordHiddenWithName 히든 검 이름 포함 기록
-func (t *Telemetry) RecordHiddenWithName(swordName string) {
+// RecordSpecialWithName 특수 아이템 이름 포함 기록
+func (t *Telemetry) RecordSpecialWithName(swordName string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.enabled {
@@ -434,19 +434,19 @@ func (t *Telemetry) RecordHiddenWithName(swordName string) {
 
 	// 기존 통계 업데이트
 	t.stats.FarmingAttempts++
-	t.stats.HiddenFound++
+	t.stats.SpecialFound++
 
-	// 히든 검 이름별 통계 (v2)
+	// 특수 아이템 이름별 통계 (v2)
 	if swordName != "" {
-		if t.stats.HiddenFoundByName == nil {
-			t.stats.HiddenFoundByName = make(map[string]int)
+		if t.stats.SpecialFoundByName == nil {
+			t.stats.SpecialFoundByName = make(map[string]int)
 		}
-		t.stats.HiddenFoundByName[swordName]++
+		t.stats.SpecialFoundByName[swordName]++
 	}
 }
 
 // RecordFarmingWithItem 아이템 이름과 타입 포함 파밍 기록
-// itemType: "hidden", "normal", "trash"
+// itemType: "special"(특수), "normal"(일반), "trash"(쓰레기)
 func (t *Telemetry) RecordFarmingWithItem(itemName string, itemType string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -456,20 +456,20 @@ func (t *Telemetry) RecordFarmingWithItem(itemName string, itemType string) {
 
 	// 기존 통계 업데이트
 	t.stats.FarmingAttempts++
-	if itemType == "hidden" {
-		t.stats.HiddenFound++
+	if itemType == "special" {
+		t.stats.SpecialFound++
 	} else if itemType == "trash" || itemType == "normal" {
 		t.stats.TrashFound++
 	}
 
 	// 아이템별 파밍 통계 (v2)
 	if itemName != "" {
-		// 히든 이름별 통계
-		if itemType == "hidden" {
-			if t.stats.HiddenFoundByName == nil {
-				t.stats.HiddenFoundByName = make(map[string]int)
+		// 특수 이름별 통계
+		if itemType == "special" {
+			if t.stats.SpecialFoundByName == nil {
+				t.stats.SpecialFoundByName = make(map[string]int)
 			}
-			t.stats.HiddenFoundByName[itemName]++
+			t.stats.SpecialFoundByName[itemName]++
 		}
 
 		// 전체 아이템 통계
@@ -481,8 +481,8 @@ func (t *Telemetry) RecordFarmingWithItem(itemName string, itemType string) {
 		}
 		stat := t.stats.ItemFarmingStats[itemName]
 		stat.TotalCount++
-		if itemType == "hidden" {
-			stat.HiddenCount++
+		if itemType == "special" {
+			stat.SpecialCount++
 		} else {
 			stat.NormalCount++
 		}
@@ -648,10 +648,10 @@ func (t *Telemetry) copyStats() Stats {
 			copied.SwordBattleStats[k] = &vc
 		}
 	}
-	if t.stats.HiddenFoundByName != nil {
-		copied.HiddenFoundByName = make(map[string]int)
-		for k, v := range t.stats.HiddenFoundByName {
-			copied.HiddenFoundByName[k] = v
+	if t.stats.SpecialFoundByName != nil {
+		copied.SpecialFoundByName = make(map[string]int)
+		for k, v := range t.stats.SpecialFoundByName {
+			copied.SpecialFoundByName[k] = v
 		}
 	}
 	if t.stats.ItemFarmingStats != nil {

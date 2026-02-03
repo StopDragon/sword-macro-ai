@@ -27,13 +27,13 @@
 새로 추가된 메시지들이 `\n`을 포함하고 있습니다:
 
 ```go
-overlay.UpdateStatus("⭐ 히든 아이템 뽑기\n🎉 히든 발견!\n[%s]\n\n📋 판단: 히든 → 보관/강화", itemName)
+overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n🎉 특수 발견!\n[%s]\n\n📋 판단: 특수 → 보관/강화", itemName)
 ```
 
 Windows의 `TextOutW` API는 개행 문자를 처리하지 않아 **모든 텍스트가 한 줄로 표시**됩니다.
 
 **영향 받는 코드**:
-- `loopHidden()` - 히든/트래시 감지 메시지
+- `loopSpecial()` - 특수/쓰레기 감지 메시지
 - `loopGoldMine()` - 파밍/강화/판매 메시지
 - `loopBattle()` - 타겟 선택/결과 메시지
 - `enhanceToTargetWithLevel()` - 강화 결과 메시지
@@ -76,11 +76,11 @@ procTextOutW.Call(hdc, 10, 10, uintptr(unsafe.Pointer(textPtr)), uintptr(len(sta
 
 새로운 메시지 예시 (5줄):
 ```
-⭐ 히든 아이템 뽑기
-트래시: 15회
+⭐ 특수 아이템 뽑기
+쓰레기: 15회
 🗑️ 고대의 검
 
-📋 판단: trash → 파괴
+📋 판단: 쓰레기 → 파괴
 ```
 
 Windows에서 한 줄로 압축되어 **280px 내에서 대부분 잘림** 현상이 발생합니다.

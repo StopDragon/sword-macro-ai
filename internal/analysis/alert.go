@@ -163,12 +163,12 @@ func (e *AlertEngine) checkAlerts() []Alert {
 			})
 		}
 
-		// 히든 발견 알림
-		if e.session.HiddenFound > 0 {
+		// 특수 아이템 발견 알림
+		if e.session.SpecialFound > 0 {
 			alerts = append(alerts, Alert{
 				Type:      AlertOpportunity,
 				Icon:      "✨",
-				Message:   fmt.Sprintf("히든 검 %d개 발견!", e.session.HiddenFound),
+				Message:   fmt.Sprintf("특수 아이템 %d개 발견!", e.session.SpecialFound),
 				Priority:  5,
 				Timestamp: time.Now(),
 				Expires:   time.Now().Add(30 * time.Second),

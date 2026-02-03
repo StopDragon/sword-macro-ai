@@ -6,7 +6,7 @@
 
 사용자들의 게임 데이터를 수집하여 **실제 데이터 기반** 분석 정보 제공:
 - 검 종류별 승률/역배 성공률
-- 히든 검 출현 확률
+- 특수 아이템 출현 확률
 - 레벨별 실제 강화 성공률 (이론값 vs 실측값)
 - 내 검의 커뮤니티 평균 대비 성적
 
@@ -24,10 +24,10 @@
 | `upset_attempts` | int | 역배 시도 횟수 |
 | `upset_wins` | int | 역배 성공 횟수 |
 
-### 1.2 히든 검 발견 통계
+### 1.2 특수 아이템 발견 통계
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| `hidden_name` | string | 히든 검 이름 |
+| `special_name` | string | 특수 아이템 이름 |
 | `count` | int | 발견 횟수 |
 
 ### 1.3 레벨별 역배 통계
@@ -86,8 +86,8 @@ type Stats struct {
     // 검 종류별 배틀 통계: "불꽃검" -> SwordBattleStat
     SwordBattleStats map[string]*SwordBattleStat `json:"sword_battle_stats,omitempty"`
 
-    // 히든 검 발견 통계: "용검" -> 3
-    HiddenFoundByName map[string]int `json:"hidden_found_by_name,omitempty"`
+    // 특수 아이템 발견 통계: "용검" -> 3
+    SpecialFoundByName map[string]int `json:"special_found_by_name,omitempty"`
 
     // 레벨차별 역배 통계: 1 -> UpsetStat, 2 -> UpsetStat, 3 -> UpsetStat
     UpsetStatsByDiff map[int]*UpsetStat `json:"upset_stats_by_diff,omitempty"`
@@ -106,7 +106,7 @@ type StatsStore struct {
 
     // 검 종류별 통계 (전체 커뮤니티)
     swordBattleStats  map[string]*SwordBattleStat
-    hiddenFoundByName map[string]int
+    specialFoundByName map[string]int
     upsetStatsByDiff  map[int]*UpsetStat
     swordSaleStats    map[string]*SwordSaleStat
 }
@@ -141,16 +141,16 @@ GET /api/stats/swords
 }
 ```
 
-### 3.2 히든 검 출현 확률
+### 3.2 특수 아이템 출현 확률
 ```
-GET /api/stats/hidden
+GET /api/stats/special
 ```
 
 **Response:**
 ```json
 {
   "total_farming": 1250000,
-  "hidden": [
+  "special": [
     {"name": "용검", "count": 125, "rate": 0.01},
     {"name": "천사검", "count": 312, "rate": 0.025},
     {"name": "악마검", "count": 287, "rate": 0.023}
@@ -213,8 +213,8 @@ func (t *Telemetry) RecordBattleWithSword(
     goldEarned int,
 )
 
-// RecordHiddenWithName 히든 검 이름 포함 기록
-func (t *Telemetry) RecordHiddenWithName(swordName string)
+// RecordSpecialWithName 특수 아이템 이름 포함 기록
+func (t *Telemetry) RecordSpecialWithName(swordName string)
 
 // RecordSaleWithSword 검 종류 포함 판매 기록
 func (t *Telemetry) RecordSaleWithSword(swordName string, level int, price int)
@@ -225,18 +225,18 @@ func (t *Telemetry) RecordSaleWithSword(swordName string, level int, price int)
 | 함수 | 수정 내용 |
 |------|----------|
 | `runBattleMode()` | 배틀 시 검 이름 추출 후 `RecordBattleWithSword()` 호출 |
-| `runHiddenMode()` | 히든 발견 시 검 이름 추출 후 `RecordHiddenWithName()` 호출 |
+| `runSpecialMode()` | 특수 아이템 발견 시 이름 추출 후 `RecordSpecialWithName()` 호출 |
 | `runGoldMineMode()` | 판매 시 검 이름 추출 후 `RecordSaleWithSword()` 호출 |
 
 ### 4.3 parser.go 수정 필요
 
-히든 검 이름 추출을 위한 패턴 추가:
+특수 아이템 이름 추출을 위한 패턴 추가:
 ```go
-// 히든 검 이름 패턴
-hiddenNamePattern = regexp.MustCompile(`(?:히든|hidden).*?『([^』]+)』`)
+// 특수 아이템 이름 패턴
+specialNamePattern = regexp.MustCompile(`(?:히든|hidden|특수|special).*?『([^』]+)』`)
 
-// ExtractHiddenName 히든 검 이름 추출
-func ExtractHiddenName(text string) string
+// ExtractSpecialName 특수 아이템 이름 추출
+func ExtractSpecialName(text string) string
 ```
 
 ---
@@ -289,7 +289,7 @@ func ExtractHiddenName(text string) string
 - 파밍/판매 통계
 - 앱 버전, OS 종류
 - **검 종류별 통계 (이름, 승률)** ← 추가
-- **히든 검 발견 종류** ← 추가
+- **특수 아이템 발견 종류** ← 추가
 ```
 
 ---
@@ -299,11 +299,11 @@ func ExtractHiddenName(text string) string
 ### Phase 1: 데이터 구조 (클라이언트)
 1. [ ] `telemetry.go` - 새 Stats 필드 추가
 2. [ ] `telemetry.go` - 새 Record 함수 추가
-3. [ ] `parser.go` - 히든 검 이름 추출 패턴 추가
+3. [ ] `parser.go` - 특수 아이템 이름 추출 패턴 추가
 
 ### Phase 2: 데이터 수집 (클라이언트)
 4. [ ] `engine.go` - `runBattleMode()` 수정
-5. [ ] `engine.go` - `runHiddenMode()` 수정
+5. [ ] `engine.go` - `runSpecialMode()` 수정
 6. [ ] `engine.go` - `runGoldMineMode()` 수정
 
 ### Phase 3: 서버 API
@@ -416,7 +416,7 @@ type SessionStats struct {
     EnhanceCount  int     `json:"enhance_count"`
     BattleCount   int     `json:"battle_count"`
     SalesCount    int     `json:"sales_count"`
-    HiddenFound   int     `json:"hidden_found"`
+    SpecialFound  int     `json:"special_found"`
 
     // 전략 분석
     AvgSellLevel  float64 `json:"avg_sell_level"` // 평균 판매 레벨
@@ -513,8 +513,8 @@ var DefaultStrategies = []StrategyProfile{
         AutoBattle:   true,
     },
     {
-        Name:         "히든 헌터",
-        Description:  "히든 검 파밍 전문",
+        Name:         "특수 헌터",
+        Description:  "특수 아이템 파밍 전문",
         TargetLevel:  5,
         SellLevels:   []int{5, 6, 7},
         MaxUpsetDiff: 0,
@@ -529,7 +529,7 @@ var DefaultStrategies = []StrategyProfile{
 1. 안전한 10강러 (저위험) ◀ 현재
 2. 공격적 12강러 (고위험)
 3. 역배 전문가 (배틀 중심)
-4. 히든 헌터 (파밍 전문)
+4. 특수 헌터 (파밍 전문)
 5. [커스텀] 내 전략
 0. 뒤로
 
@@ -785,7 +785,7 @@ GET /api/strategy/optimal-sell-point?level=8&gold=500000
 
 ### Phase 1: 기본 데이터 수집 (v1.1)
 - [ ] 검 종류별 배틀 통계
-- [ ] 히든 검 발견 종류
+- [ ] 특수 아이템 발견 종류
 - [ ] 레벨별 역배 실측
 - [ ] **세션 통계 기본 (시작/종료 골드, 활동 횟수)**
 

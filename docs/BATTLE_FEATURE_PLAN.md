@@ -90,7 +90,7 @@ type BattleResult struct {
 ```
 === 카카오톡 검키우기 ===
 1. 강화 목표 달성
-2. 히든 검 뽑기
+2. 특수 아이템 뽑기
 3. 골드 채굴 (돈벌기)
 4. 자동 배틀 (역배)     ← NEW
 5. 옵션 설정
@@ -132,7 +132,7 @@ type BattleResult struct {
 |----------|--------|------|
 | **세션** | 시작/종료 시간, 모드, 실행 시간 | 사용 패턴 분석 |
 | **강화** | 시도 횟수, 성공/실패/파괴, 레벨별 확률 | 최적 강화 전략 |
-| **파밍** | 획득 검 등급, 히든 확률 | 파밍 효율 분석 |
+| **파밍** | 획득 검 등급, 특수 확률 | 파밍 효율 분석 |
 | **판매** | 검 이름, 레벨, 판매가 | 가격 테이블 구축 |
 | **배틀** | 상대 레벨, 승/패, 획득 골드 | 역배 전략 최적화 |
 | **골드** | 수입/지출 내역 | 경제 시스템 분석 |
@@ -174,7 +174,7 @@ type Stats struct {
 
     // 파밍 통계 (NEW)
     FarmingAttempts  int `json:"farming_attempts"`
-    HiddenFound      int `json:"hidden_found"`
+    SpecialFound     int `json:"special_found"`
     TrashFound       int `json:"trash_found"`
 }
 
@@ -280,7 +280,7 @@ GROUP BY level;
 | **역배 승률표** | battle_upset_stats | 최적 역배 레벨 차이 도출 |
 | **판매 가격표** | sale_price_table | 검 레벨별 시세 공개 |
 | **시간대별 효율** | session times | 최적 플레이 시간대 |
-| **파밍 히든 확률** | farming stats | 히든 출현율 측정 |
+| **파밍 특수 확률** | farming stats | 특수 출현율 측정 |
 
 ### 4.2 커뮤니티 공개 API
 

@@ -77,8 +77,8 @@ var defaultStrategies = []StrategyProfile{
 		AutoBattle:   true,
 	},
 	{
-		Name:         "히든 헌터",
-		Description:  "히든 검 파밍 전문",
+		Name:         "특수 헌터",
+		Description:  "특수 아이템 파밍 전문",
 		TargetLevel:  5,
 		SellLevels:   []int{5, 6, 7},
 		MaxUpsetDiff: 0,

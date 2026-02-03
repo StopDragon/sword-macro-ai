@@ -19,7 +19,7 @@ func init() {
 	runtime.LockOSThread()
 }
 
-const VERSION = "2.0.0"
+const VERSION = "2.5.1"
 
 func main() {
 	// Windows 콘솔 ANSI 지원 활성화 및 UTF-8 설정

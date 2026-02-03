@@ -61,7 +61,7 @@ timestamp, event, level, result, gold, item, mode, cycle_id, cycle_sec, gold_ear
 | `period` | 집계 기간 (일 단위) | `"2026-02-03"` |
 | `enhance_counts` | 레벨별 강화 시도 횟수 | `{"+1": 50, "+5": 30, "+10": 12}` |
 | `enhance_results` | 레벨별 결과 분포 | `{"+5": {"success": 15, "hold": 10, "destroy": 5}}` |
-| `farm_stats` | 파밍 통계 | `{"trash": 120, "hidden": 15}` |
+| `farm_stats` | 파밍 통계 | `{"trash": 120, "special": 15}` |
 | `cycle_stats` | 사이클 집계 | `{"count": 8, "avg_sec": 62.5, "avg_gold": 71000}` |
 | `gold_per_hour` | 시간당 골드 (구간화) | `"1M-1.5M"` |
 | `error_types` | 오류 유형 카운트 | `{"ocr_fail": 3, "input_fail": 1}` |
@@ -96,7 +96,7 @@ timestamp, event, level, result, gold, item, mode, cycle_id, cycle_sec, gold_ear
     },
     "farm": {
       "trash_count": 85,
-      "hidden_count": 10
+      "special_count": 10
     },
     "cycles": {
       "completed": 8,
@@ -192,7 +192,7 @@ class Telemetry:
     def _init_stats(self):
         return {
             'enhance': {'by_level': {}},
-            'farm': {'trash': 0, 'hidden': 0},
+            'farm': {'trash': 0, 'special': 0},
             'cycles': {'count': 0, 'total_sec': 0, 'total_gold': 0},
             'errors': {}
         }
@@ -687,7 +687,7 @@ else:
 | **레벨별 성공률 테이블** | enhance by_level | 체감 확률 vs 실제 확률 검증 |
 | **최적 딜레이 튜닝** | cycle_stats, errors | OCR 인식률 vs 속도 트레이드오프 최적화 |
 | **ROI 최적 목표 레벨** | enhance + cycle_stats | +10 vs +9 vs +8 수익성 비교 |
-| **히든 드랍률** | farm stats | 파밍 전략 최적화 |
+| **특수 드랍률** | farm stats | 파밍 전략 최적화 |
 
 ### 7.2 장기 활용
 

@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	gameDataEndpoint = "https://sword-ai.stopdragon.kr/api/game-data"
-	cacheExpiry      = 1 * time.Hour
+	gameDataEndpoint        = "https://sword-ai.stopdragon.kr/api/game-data"
+	optimalSellEndpoint     = "https://sword-ai.stopdragon.kr/api/strategy/optimal-sell-point"
+	cacheExpiry             = 1 * time.Hour
+	optimalSellCacheExpiry  = 10 * time.Minute
 )
 
 // EnhanceRate 강화 확률 데이터 (레벨별)
@@ -46,12 +48,34 @@ type GameData struct {
 	UpdatedAt     string         `json:"updated_at"`
 }
 
+// LevelEfficiency 레벨별 효율성 데이터
+type LevelEfficiency struct {
+	Level              int     `json:"level"`
+	AvgPrice           int     `json:"avg_price"`
+	ExpectedTrials     float64 `json:"expected_trials"`
+	ExpectedTimeSecond float64 `json:"expected_time_second"`
+	SuccessProb        float64 `json:"success_prob"`
+	GoldPerMinute      float64 `json:"gold_per_minute"`
+	Recommendation     string  `json:"recommendation"`
+}
+
+// OptimalSellData 최적 판매 시점 데이터
+type OptimalSellData struct {
+	OptimalLevel      int               `json:"optimal_level"`
+	OptimalGPM        float64           `json:"optimal_gpm"`
+	LevelEfficiencies []LevelEfficiency `json:"level_efficiencies"`
+	Note              string            `json:"note"`
+}
+
 // 캐시된 게임 데이터
 var (
-	cachedData      *GameData
-	cachedAt        time.Time
-	cacheMu         sync.RWMutex
-	dataInitialized bool
+	cachedData            *GameData
+	cachedAt              time.Time
+	cacheMu               sync.RWMutex
+	dataInitialized       bool
+	cachedOptimalSell     *OptimalSellData
+	cachedOptimalSellAt   time.Time
+	optimalSellMu         sync.RWMutex
 )
 
 // FetchGameData 서버에서 게임 데이터 가져오기
@@ -278,16 +302,92 @@ func CalcOptimalSellLevel(currentGold int) int {
 	return bestLevel
 }
 
+// FetchOptimalSellData 서버에서 최적 판매 시점 데이터 가져오기
+func FetchOptimalSellData() (*OptimalSellData, error) {
+	optimalSellMu.RLock()
+	if cachedOptimalSell != nil && time.Since(cachedOptimalSellAt) < optimalSellCacheExpiry {
+		defer optimalSellMu.RUnlock()
+		return cachedOptimalSell, nil
+	}
+	optimalSellMu.RUnlock()
+
+	// 서버에서 데이터 가져오기
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(optimalSellEndpoint)
+	if err != nil {
+		// 캐시가 있으면 만료되어도 사용
+		optimalSellMu.RLock()
+		if cachedOptimalSell != nil {
+			defer optimalSellMu.RUnlock()
+			return cachedOptimalSell, nil
+		}
+		optimalSellMu.RUnlock()
+		return nil, fmt.Errorf("서버 연결 실패: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		optimalSellMu.RLock()
+		if cachedOptimalSell != nil {
+			defer optimalSellMu.RUnlock()
+			return cachedOptimalSell, nil
+		}
+		optimalSellMu.RUnlock()
+		return nil, fmt.Errorf("서버 오류: %d", resp.StatusCode)
+	}
+
+	var data OptimalSellData
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("데이터 파싱 실패: %v", err)
+	}
+
+	// 캐시 업데이트
+	optimalSellMu.Lock()
+	cachedOptimalSell = &data
+	cachedOptimalSellAt = time.Now()
+	optimalSellMu.Unlock()
+
+	return &data, nil
+}
+
 // GetOptimalSellLevel 서버 통계 기반 최적 판매 레벨 조회
 // 서버에서 커뮤니티 데이터 기반 추천값이 있으면 사용, 없으면 로컬 계산
 func GetOptimalSellLevel(currentGold int) (level int, source string) {
-	// TODO: 서버 API (GET /api/strategy/optimal-sell-point) 추가 시 여기서 호출
-	// 현재는 로컬 계산 사용
+	// 서버 API 호출 시도
+	data, err := FetchOptimalSellData()
+	if err == nil && data != nil && data.OptimalLevel > 0 {
+		return data.OptimalLevel, fmt.Sprintf("서버(%.0f G/분)", data.OptimalGPM)
+	}
 
+	// 서버 실패 시 로컬 계산 사용
 	level = CalcOptimalSellLevel(currentGold)
 	source = "계산값"
 
 	return level, source
+}
+
+// GetLevelEfficiency 특정 레벨의 효율성 데이터 조회
+func GetLevelEfficiency(level int) *LevelEfficiency {
+	data, err := FetchOptimalSellData()
+	if err != nil || data == nil {
+		return nil
+	}
+
+	for i := range data.LevelEfficiencies {
+		if data.LevelEfficiencies[i].Level == level {
+			return &data.LevelEfficiencies[i]
+		}
+	}
+	return nil
+}
+
+// GetAllLevelEfficiencies 모든 레벨 효율성 데이터 조회
+func GetAllLevelEfficiencies() []LevelEfficiency {
+	data, err := FetchOptimalSellData()
+	if err != nil || data == nil {
+		return nil
+	}
+	return data.LevelEfficiencies
 }
 
 // FormatGold 골드를 읽기 쉽게 포맷

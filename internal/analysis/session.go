@@ -13,13 +13,13 @@ type SessionTracker struct {
 	GoldHistory []GoldSnapshot
 
 	// 활동 카운터
-	EnhanceCount int
-	BattleCount  int
-	BattleWins   int
-	SalesCount   int
-	HiddenFound  int
+	EnhanceCount  int
+	BattleCount   int
+	BattleWins    int
+	SalesCount    int
+	SpecialFound  int // 특수 아이템 발견 횟수
 	UpsetAttempts int
-	UpsetWins    int
+	UpsetWins     int
 
 	// 골드 추적
 	StartingGold int
@@ -54,7 +54,7 @@ type SessionReport struct {
 	EnhanceCount int `json:"enhance_count"`
 	BattleCount  int `json:"battle_count"`
 	SalesCount   int `json:"sales_count"`
-	HiddenFound  int `json:"hidden_found"`
+	SpecialFound int `json:"special_found"` // 특수 아이템 발견 횟수
 
 	// 전략 분석
 	WinRate      float64 `json:"win_rate"`       // 배틀 승률
@@ -118,9 +118,9 @@ func (s *SessionTracker) RecordSale() {
 	s.SalesCount++
 }
 
-// RecordHidden 히든 발견 기록
-func (s *SessionTracker) RecordHidden() {
-	s.HiddenFound++
+// RecordSpecial 특수 아이템 발견 기록
+func (s *SessionTracker) RecordSpecial() {
+	s.SpecialFound++
 }
 
 // GenerateReport 세션 리포트 생성
@@ -163,7 +163,7 @@ func (s *SessionTracker) GenerateReport() *SessionReport {
 		EnhanceCount: s.EnhanceCount,
 		BattleCount:  s.BattleCount,
 		SalesCount:   s.SalesCount,
-		HiddenFound:  s.HiddenFound,
+		SpecialFound: s.SpecialFound,
 		WinRate:      winRate,
 		UpsetWinRate: upsetWinRate,
 	}

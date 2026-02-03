@@ -148,12 +148,12 @@ type TelemetryStats struct {
 	SalesTotalGold   int         `json:"sales_total_gold"`
 	SalesMaxPrice    int         `json:"sales_max_price"`
 	FarmingAttempts  int         `json:"farming_attempts"`
-	HiddenFound      int         `json:"hidden_found"`
+	SpecialFound     int         `json:"special_found"`
 	TrashFound       int         `json:"trash_found"`
 
 	// === v2 새로 추가 ===
-	SwordBattleStats  map[string]*SwordBattleStat  `json:"sword_battle_stats,omitempty"`
-	HiddenFoundByName map[string]int               `json:"hidden_found_by_name,omitempty"`
+	SwordBattleStats   map[string]*SwordBattleStat  `json:"sword_battle_stats,omitempty"`
+	SpecialFoundByName map[string]int               `json:"special_found_by_name,omitempty"`
 	UpsetStatsByDiff  map[int]*UpsetStat           `json:"upset_stats_by_diff,omitempty"`
 	SwordSaleStats    map[string]*SwordSaleStat    `json:"sword_sale_stats,omitempty"`
 	SwordEnhanceStats map[string]*SwordEnhanceStat `json:"sword_enhance_stats,omitempty"`
@@ -193,9 +193,9 @@ type SwordEnhanceStat struct {
 
 // ItemFarmingStat 아이템별 파밍 통계
 type ItemFarmingStat struct {
-	TotalCount  int `json:"total_count"`
-	HiddenCount int `json:"hidden_count"`
-	NormalCount int `json:"normal_count"`
+	TotalCount   int `json:"total_count"`
+	SpecialCount int `json:"special_count"`
+	NormalCount  int `json:"normal_count"`
 }
 
 type TelemetryPayload struct {
@@ -224,13 +224,13 @@ type StatsStore struct {
 	upsetWins       int
 	battleGold      int
 	farmingAttempts int
-	hiddenFound     int
+	specialFound    int
 	salesCount      int
 	salesTotalGold  int
 
 	// === v2 통계 ===
-	swordBattleStats  map[string]*SwordBattleStat
-	hiddenFoundByName map[string]int
+	swordBattleStats   map[string]*SwordBattleStat
+	specialFoundByName map[string]int
 	upsetStatsByDiff  map[int]*UpsetStat
 	swordSaleStats    map[string]*SwordSaleStat
 	swordEnhanceStats map[string]*SwordEnhanceStat
@@ -238,13 +238,13 @@ type StatsStore struct {
 }
 
 var stats = &StatsStore{
-	enhanceByLevel:    make(map[int]int),
-	swordBattleStats:  make(map[string]*SwordBattleStat),
-	hiddenFoundByName: make(map[string]int),
-	upsetStatsByDiff:  make(map[int]*UpsetStat),
-	swordSaleStats:    make(map[string]*SwordSaleStat),
-	swordEnhanceStats: make(map[string]*SwordEnhanceStat),
-	itemFarmingStats:  make(map[string]*ItemFarmingStat),
+	enhanceByLevel:     make(map[int]int),
+	swordBattleStats:   make(map[string]*SwordBattleStat),
+	specialFoundByName: make(map[string]int),
+	upsetStatsByDiff:   make(map[int]*UpsetStat),
+	swordSaleStats:     make(map[string]*SwordSaleStat),
+	swordEnhanceStats:  make(map[string]*SwordEnhanceStat),
+	itemFarmingStats:   make(map[string]*ItemFarmingStat),
 }
 
 // ========================
@@ -392,7 +392,7 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 	stats.upsetWins += payload.Stats.UpsetWins
 	stats.battleGold += payload.Stats.BattleGoldEarned
 	stats.farmingAttempts += payload.Stats.FarmingAttempts
-	stats.hiddenFound += payload.Stats.HiddenFound
+	stats.specialFound += payload.Stats.SpecialFound
 	stats.salesCount += payload.Stats.SalesCount
 	stats.salesTotalGold += payload.Stats.SalesTotalGold
 
@@ -409,9 +409,9 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 			stats.swordBattleStats[name].UpsetWins += stat.UpsetWins
 		}
 
-		// 히든 이름별 통계
-		for name, cnt := range payload.Stats.HiddenFoundByName {
-			stats.hiddenFoundByName[name] += cnt
+		// 특수 이름별 통계
+		for name, cnt := range payload.Stats.SpecialFoundByName {
+			stats.specialFoundByName[name] += cnt
 		}
 
 		// 레벨차별 역배 통계
@@ -450,7 +450,7 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 				stats.itemFarmingStats[name] = &ItemFarmingStat{}
 			}
 			stats.itemFarmingStats[name].TotalCount += stat.TotalCount
-			stats.itemFarmingStats[name].HiddenCount += stat.HiddenCount
+			stats.itemFarmingStats[name].SpecialCount += stat.SpecialCount
 			stats.itemFarmingStats[name].NormalCount += stat.NormalCount
 		}
 	}
@@ -493,9 +493,9 @@ func handleStatsDetailed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 파밍 통계
-	hiddenRate := "0%"
+	specialRate := "0%"
 	if stats.farmingAttempts > 0 {
-		hiddenRate = fmt.Sprintf("%.2f%%", float64(stats.hiddenFound)/float64(stats.farmingAttempts)*100)
+		specialRate = fmt.Sprintf("%.2f%%", float64(stats.specialFound)/float64(stats.farmingAttempts)*100)
 	}
 
 	// 판매 통계
@@ -522,7 +522,7 @@ func handleStatsDetailed(w http.ResponseWriter, r *http.Request) {
 		},
 		"파밍": map[string]interface{}{
 			"총_시도":  stats.farmingAttempts,
-			"히든_확률": hiddenRate,
+			"특수_확률": specialRate,
 		},
 		"판매": map[string]interface{}{
 			"총_판매": stats.salesCount,
@@ -582,27 +582,27 @@ func handleSwordStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// 히든 검 출현 확률
-func handleHiddenStats(w http.ResponseWriter, r *http.Request) {
+// 특수 검 출현 확률
+func handleSpecialStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	stats.mu.RLock()
 	defer stats.mu.RUnlock()
 
-	type HiddenEntry struct {
+	type SpecialEntry struct {
 		Name  string  `json:"name"`
 		Count int     `json:"count"`
 		Rate  float64 `json:"rate"`
 	}
 
-	var hidden []HiddenEntry
-	for name, cnt := range stats.hiddenFoundByName {
+	var specials []SpecialEntry
+	for name, cnt := range stats.specialFoundByName {
 		rate := 0.0
 		if stats.farmingAttempts > 0 {
 			rate = float64(cnt) / float64(stats.farmingAttempts) * 100
 		}
-		hidden = append(hidden, HiddenEntry{
+		specials = append(specials, SpecialEntry{
 			Name:  name,
 			Count: cnt,
 			Rate:  rate,
@@ -611,7 +611,7 @@ func handleHiddenStats(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"total_farming": stats.farmingAttempts,
-		"hidden":        hidden,
+		"special":       specials,
 	})
 }
 
@@ -677,25 +677,25 @@ func handleItemStats(w http.ResponseWriter, r *http.Request) {
 	defer stats.mu.RUnlock()
 
 	type ItemEntry struct {
-		Name        string  `json:"name"`
-		TotalCount  int     `json:"total_count"`
-		HiddenCount int     `json:"hidden_count"`
-		NormalCount int     `json:"normal_count"`
-		HiddenRate  float64 `json:"hidden_rate"`
+		Name         string  `json:"name"`
+		TotalCount   int     `json:"total_count"`
+		SpecialCount int     `json:"special_count"`
+		NormalCount  int     `json:"normal_count"`
+		SpecialRate  float64 `json:"special_rate"`
 	}
 
 	var items []ItemEntry
 	for name, stat := range stats.itemFarmingStats {
-		hiddenRate := 0.0
+		specialRate := 0.0
 		if stat.TotalCount > 0 {
-			hiddenRate = float64(stat.HiddenCount) / float64(stat.TotalCount) * 100
+			specialRate = float64(stat.SpecialCount) / float64(stat.TotalCount) * 100
 		}
 		items = append(items, ItemEntry{
-			Name:        name,
-			TotalCount:  stat.TotalCount,
-			HiddenCount: stat.HiddenCount,
-			NormalCount: stat.NormalCount,
-			HiddenRate:  hiddenRate,
+			Name:         name,
+			TotalCount:   stat.TotalCount,
+			SpecialCount: stat.SpecialCount,
+			NormalCount:  stat.NormalCount,
+			SpecialRate:  specialRate,
 		})
 	}
 
@@ -750,6 +750,146 @@ func handleEnhanceStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// 검 종류+레벨별 판매 통계
+func handleSaleStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	stats.mu.RLock()
+	defer stats.mu.RUnlock()
+
+	type SaleEntry struct {
+		Key        string `json:"key"`        // "검이름_레벨"
+		TotalPrice int    `json:"total_price"`
+		Count      int    `json:"count"`
+		AvgPrice   int    `json:"avg_price"`
+	}
+
+	var sales []SaleEntry
+	totalCount := 0
+	totalGold := 0
+
+	for key, stat := range stats.swordSaleStats {
+		avgPrice := 0
+		if stat.Count > 0 {
+			avgPrice = stat.TotalPrice / stat.Count
+		}
+		sales = append(sales, SaleEntry{
+			Key:        key,
+			TotalPrice: stat.TotalPrice,
+			Count:      stat.Count,
+			AvgPrice:   avgPrice,
+		})
+		totalCount += stat.Count
+		totalGold += stat.TotalPrice
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_sales": totalCount,
+		"total_gold":  totalGold,
+		"sales":       sales,
+	})
+}
+
+// 최적 판매 시점 계산 (시간 효율 기반)
+func handleOptimalSellPoint(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	stats.mu.RLock()
+	defer stats.mu.RUnlock()
+
+	gameData := getGameData()
+
+	// 레벨별 예상 강화 횟수 계산 (0부터 해당 레벨까지)
+	// 기대 시도 횟수 = Σ(1 / 성공률)
+	calcExpectedTrials := func(targetLevel int) float64 {
+		if targetLevel <= 0 {
+			return 0
+		}
+		total := 0.0
+		for lvl := 0; lvl < targetLevel && lvl < len(gameData.EnhanceRates); lvl++ {
+			rate := gameData.EnhanceRates[lvl].SuccessRate / 100.0
+			if rate > 0 {
+				total += 1.0 / rate
+			}
+		}
+		return total
+	}
+
+	// 예상 시간 계산 (초 단위)
+	// 파밍 시간 + 강화 시간
+	// 파밍: 약 3초, 강화: 약 2초/회
+	calcExpectedTime := func(targetLevel int) float64 {
+		farmTime := 3.0                                   // 아이템 파밍
+		enhanceTime := calcExpectedTrials(targetLevel) * 2.0 // 강화당 2초
+		return farmTime + enhanceTime
+	}
+
+	type LevelEfficiency struct {
+		Level              int     `json:"level"`
+		AvgPrice           int     `json:"avg_price"`
+		ExpectedTrials     float64 `json:"expected_trials"`     // 기대 강화 횟수
+		ExpectedTimeSecond float64 `json:"expected_time_second"` // 기대 소요 시간
+		SuccessProb        float64 `json:"success_prob"`        // 성공 확률 (%)
+		GoldPerMinute      float64 `json:"gold_per_minute"`     // 시간당 골드 효율
+		Recommendation     string  `json:"recommendation"`       // 추천 여부
+	}
+
+	var efficiencies []LevelEfficiency
+	bestLevel := 10
+	bestGPM := 0.0
+
+	// 레벨 5-15 범위에서 분석
+	for level := 5; level <= 15 && level < len(gameData.SwordPrices); level++ {
+		price := gameData.SwordPrices[level].AvgPrice
+		trials := calcExpectedTrials(level)
+		timeSeconds := calcExpectedTime(level)
+
+		// 성공 확률 (0부터 해당 레벨까지)
+		successProb := 1.0
+		for lvl := 0; lvl < level && lvl < len(gameData.EnhanceRates); lvl++ {
+			successProb *= gameData.EnhanceRates[lvl].SuccessRate / 100.0
+		}
+
+		// 시간당 골드 효율 = (판매가 × 성공확률) / (소요시간/60)
+		gpm := 0.0
+		if timeSeconds > 0 {
+			gpm = (float64(price) * successProb) / (timeSeconds / 60.0)
+		}
+
+		recommendation := ""
+		if gpm > bestGPM {
+			bestGPM = gpm
+			bestLevel = level
+		}
+
+		efficiencies = append(efficiencies, LevelEfficiency{
+			Level:              level,
+			AvgPrice:           price,
+			ExpectedTrials:     trials,
+			ExpectedTimeSecond: timeSeconds,
+			SuccessProb:        successProb * 100,
+			GoldPerMinute:      gpm,
+			Recommendation:     recommendation,
+		})
+	}
+
+	// 최적 레벨에 추천 표시
+	for i := range efficiencies {
+		if efficiencies[i].Level == bestLevel {
+			efficiencies[i].Recommendation = "optimal"
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"optimal_level":      bestLevel,
+		"optimal_gpm":        bestGPM,
+		"level_efficiencies": efficiencies,
+		"note":               "gold_per_minute = (avg_price × success_prob) / (expected_time / 60)",
+	})
+}
+
 func generateSignature(sessionID, period string) string {
 	h := sha256.Sum256([]byte(sessionID + period + getAppSecret()))
 	return hex.EncodeToString(h[:])[:16]
@@ -791,8 +931,8 @@ func validateTelemetryPayload(p *TelemetryPayload) error {
 	if len(p.Stats.SwordBattleStats) > maxMapEntries {
 		return fmt.Errorf("sword_battle_stats too many entries")
 	}
-	if len(p.Stats.HiddenFoundByName) > maxMapEntries {
-		return fmt.Errorf("hidden_found_by_name too many entries")
+	if len(p.Stats.SpecialFoundByName) > maxMapEntries {
+		return fmt.Errorf("special_found_by_name too many entries")
 	}
 	if len(p.Stats.UpsetStatsByDiff) > maxMapEntries {
 		return fmt.Errorf("upset_stats_by_diff too many entries")
@@ -813,9 +953,9 @@ func validateTelemetryPayload(p *TelemetryPayload) error {
 			return fmt.Errorf("sword name too long: %s", name)
 		}
 	}
-	for name := range p.Stats.HiddenFoundByName {
+	for name := range p.Stats.SpecialFoundByName {
 		if len(name) > maxSwordNameLen {
-			return fmt.Errorf("hidden name too long: %s", name)
+			return fmt.Errorf("special name too long: %s", name)
 		}
 	}
 	for name := range p.Stats.ItemFarmingStats {
@@ -890,20 +1030,24 @@ func main() {
 	http.HandleFunc("/api/stats/detailed", handleStatsDetailed)
 	// v2 엔드포인트
 	http.HandleFunc("/api/stats/swords", handleSwordStats)
-	http.HandleFunc("/api/stats/hidden", handleHiddenStats)
+	http.HandleFunc("/api/stats/special", handleSpecialStats)
 	http.HandleFunc("/api/stats/upset", handleUpsetStats)
 	http.HandleFunc("/api/stats/items", handleItemStats)
 	http.HandleFunc("/api/stats/enhance", handleEnhanceStats)
+	http.HandleFunc("/api/stats/sales", handleSaleStats)
+	http.HandleFunc("/api/strategy/optimal-sell-point", handleOptimalSellPoint)
 
 	log.Printf("🚀 Sword API 서버 시작 (포트: %s)", port)
 	log.Printf("   /api/game-data - 게임 데이터 조회")
 	log.Printf("   /api/telemetry - 텔레메트리 수신")
 	log.Printf("   /api/stats/detailed - 커뮤니티 통계")
 	log.Printf("   /api/stats/swords - 검 종류별 승률 (v2)")
-	log.Printf("   /api/stats/hidden - 히든 검 출현 확률 (v2)")
+	log.Printf("   /api/stats/special - 특수 검 출현 확률 (v2)")
 	log.Printf("   /api/stats/upset - 역배 실측 승률 (v2)")
 	log.Printf("   /api/stats/items - 아이템 파밍 통계 (v2)")
 	log.Printf("   /api/stats/enhance - 검 종류별 강화 성공률 (v2)")
+	log.Printf("   /api/stats/sales - 검+레벨별 판매 통계 (v2)")
+	log.Printf("   /api/strategy/optimal-sell-point - 최적 판매 시점 (v2)")
 
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatal(err)
