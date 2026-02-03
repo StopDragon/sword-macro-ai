@@ -551,7 +551,7 @@ func (e *Engine) loopEnhance() {
 			goldInfo := DetectInsufficientGold(text)
 			if goldInfo.IsInsufficient {
 				overlay.UpdateStatus("⚔️ 강화 중단\n💰 골드 부족!\n필요: %s\n보유: %s",
-					FormatGold(goldInfo.Required), FormatGold(goldInfo.Current))
+					FormatGold(goldInfo.RequiredGold), FormatGold(goldInfo.RemainingGold))
 				e.handleInsufficientGold(goldInfo)
 				return
 			}

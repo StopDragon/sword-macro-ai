@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/StopDragon/sword-macro-ai/internal/config"
+	"github.com/StopDragon/sword-macro-ai/internal/console"
 	"github.com/StopDragon/sword-macro-ai/internal/game"
 	"github.com/StopDragon/sword-macro-ai/internal/logger"
 	"github.com/StopDragon/sword-macro-ai/internal/telemetry"
@@ -21,6 +22,9 @@ func init() {
 const VERSION = "2.0.0"
 
 func main() {
+	// Windows 콘솔 ANSI 지원 활성화 및 UTF-8 설정
+	console.Init()
+
 	fmt.Println("===========================================")
 	fmt.Println("  검키우기 매크로 v" + VERSION + " (Go)")
 	fmt.Println("  macOS / Windows 크로스플랫폼")
