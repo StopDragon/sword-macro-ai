@@ -6,7 +6,7 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
-  workflow_dispatch:  # 수동 실행 허용
+  workflow_dispatch:
 
 jobs:
   build-macos:
@@ -14,76 +14,58 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          python-version: '3.11'
+          go-version: '1.21'
 
-      - name: Install dependencies
+      - name: Build macOS ARM64
         run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install -r requirements.txt
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o build/SwordMacro-darwin-arm64 ./cmd/sword-macro
 
-      - name: Build macOS app
+      - name: Build macOS AMD64
         run: |
-          pyinstaller sword_macro_mac.spec
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o build/SwordMacro-darwin-amd64 ./cmd/sword-macro
 
-      - name: Create DMG
+      - name: Create Universal Binary
         run: |
-          brew install create-dmg
-          create-dmg \
-            --volname "SwordMacro" \
-            --window-pos 200 120 \
-            --window-size 600 400 \
-            --icon-size 100 \
-            --icon "SwordMacro.app" 175 190 \
-            --app-drop-link 425 190 \
-            --hide-extension "SwordMacro.app" \
-            "SwordMacro-macOS.dmg" \
-            "dist/SwordMacro.app" || true
+          lipo -create -output build/SwordMacro-macOS \
+            build/SwordMacro-darwin-arm64 \
+            build/SwordMacro-darwin-amd64
+
+      - name: Create ZIP
+        run: |
+          cd build && zip SwordMacro-macOS.zip SwordMacro-macOS
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: SwordMacro-macOS
-          path: |
-            dist/SwordMacro.app
-            SwordMacro-macOS.dmg
-          if-no-files-found: warn
+          path: build/SwordMacro-macOS.zip
 
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          python-version: '3.11'
+          go-version: '1.21'
 
-      - name: Install dependencies
+      - name: Build Windows AMD64
         run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install -r requirements.txt
+          go build -ldflags="-s -w" -o build/SwordMacro.exe ./cmd/sword-macro
 
-      - name: Build Windows exe
+      - name: Create ZIP
         run: |
-          pyinstaller sword_macro_win.spec
-
-      - name: Create ZIP archive
-        run: |
-          Compress-Archive -Path dist/SwordMacro -DestinationPath SwordMacro-Windows.zip
+          Compress-Archive -Path build/SwordMacro.exe -DestinationPath SwordMacro-Windows.zip
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: SwordMacro-Windows
-          path: |
-            dist/SwordMacro
-            SwordMacro-Windows.zip
-          if-no-files-found: warn
+          path: SwordMacro-Windows.zip
 
   release:
     needs: [build-macos, build-windows]
@@ -104,7 +86,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/SwordMacro-macOS/SwordMacro-macOS.dmg
+            artifacts/SwordMacro-macOS/SwordMacro-macOS.zip
             artifacts/SwordMacro-Windows/SwordMacro-Windows.zip
           draft: false
           prerelease: false

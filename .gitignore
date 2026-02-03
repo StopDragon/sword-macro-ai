@@ -8,6 +8,11 @@
 __pycache__/
 *.pyc
 *.pyo
+.venv/
+
+# Go
+*.test
+*.out
 
 # 런타임 생성 파일
 sword_config.json
