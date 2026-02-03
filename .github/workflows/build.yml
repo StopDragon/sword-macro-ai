@@ -8,6 +8,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# 같은 브랜치/PR에서 새 커밋이 오면 이전 실행 취소
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-macos:
     runs-on: macos-latest
