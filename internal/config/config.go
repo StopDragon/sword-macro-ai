@@ -26,28 +26,36 @@ type Config struct {
 	GoldMineTarget int `json:"gold_mine_target"`
 	MinGold        int `json:"min_gold"`
 
+	// 배틀 설정
+	BattleLevelDiff int     `json:"battle_level_diff"` // 역배 레벨 차이 (1-3)
+	BattleCooldown  float64 `json:"battle_cooldown"`   // 배틀 간 쿨다운 (초)
+	BattleMinGold   int     `json:"battle_min_gold"`   // 최소 보유 골드 (이하면 중단)
+
 	// 캡처 영역
-	CaptureW int `json:"capture_w"`
-	CaptureH int `json:"capture_h"`
+	CaptureW  int `json:"capture_w"`
+	CaptureH  int `json:"capture_h"`
 	InputBoxH int `json:"input_box_h"`
 }
 
 // Default 기본 설정 반환
 func Default() *Config {
 	return &Config{
-		ClickX:        0,
-		ClickY:        0,
-		LockXY:        false,
-		TrashDelay:    1.2,
-		LowDelay:      1.5,
-		MidDelay:      2.5,
-		HighDelay:     3.5,
-		SlowdownLevel: 9,
-		GoldMineTarget: 10,
-		MinGold:       0,
-		CaptureW:      375,
-		CaptureH:      550,
-		InputBoxH:     80,
+		ClickX:          0,
+		ClickY:          0,
+		LockXY:          false,
+		TrashDelay:      1.2,
+		LowDelay:        1.5,
+		MidDelay:        2.5,
+		HighDelay:       3.5,
+		SlowdownLevel:   9,
+		GoldMineTarget:  10,
+		MinGold:         0,
+		BattleLevelDiff: 2,
+		BattleCooldown:  5.0,
+		BattleMinGold:   1000,
+		CaptureW:        375,
+		CaptureH:        550,
+		InputBoxH:       80,
 	}
 }
 

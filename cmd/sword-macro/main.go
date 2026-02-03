@@ -9,6 +9,7 @@ import (
 	"github.com/StopDragon/sword-macro-ai/internal/config"
 	"github.com/StopDragon/sword-macro-ai/internal/game"
 	"github.com/StopDragon/sword-macro-ai/internal/logger"
+	"github.com/StopDragon/sword-macro-ai/internal/telemetry"
 )
 
 const VERSION = "2.0.0"
@@ -24,6 +25,10 @@ func main() {
 	logger.Init()
 	defer logger.Close()
 
+	// 텔레메트리 초기화
+	telem := telemetry.New(VERSION)
+	defer telem.Flush()
+
 	// 설정 로드
 	cfg, err := config.Load()
 	if err != nil {
@@ -32,7 +37,7 @@ func main() {
 	}
 
 	// 게임 엔진 생성
-	engine := game.NewEngine(cfg)
+	engine := game.NewEngine(cfg, telem)
 
 	// 시그널 핸들링 (Ctrl+C)
 	sigChan := make(chan os.Signal, 1)
