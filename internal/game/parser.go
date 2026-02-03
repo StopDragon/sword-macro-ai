@@ -25,12 +25,14 @@ type GameState struct {
 
 // Profile 유저 프로필
 type Profile struct {
-	Name      string // @유저명
-	Level     int    // 현재 검 레벨
-	SwordName string // 검 이름
-	Wins      int    // 승리 수
-	Losses    int    // 패배 수
-	Gold      int    // 보유 골드
+	Name         string // @유저명
+	Level        int    // 현재 검 레벨
+	SwordName    string // 검 이름
+	Wins         int    // 승리 수
+	Losses       int    // 패배 수
+	Gold         int    // 보유 골드
+	BestLevel    int    // 최고 기록 레벨
+	BestSword    string // 최고 기록 검 이름
 }
 
 // RankingEntry 랭킹 항목
@@ -60,13 +62,25 @@ var (
 	successPattern = regexp.MustCompile(`(?:강화.*성공|레벨.*상승|업그레이드)`)
 	holdPattern    = regexp.MustCompile(`(?:강화.*유지|레벨.*유지|실패.*유지)`)
 	destroyPattern = regexp.MustCompile(`(?:파괴|부서|사라)`)
-	hiddenPattern  = regexp.MustCompile(`(?:히든|hidden|레전더리|전설|유니크)`)
+	// 히든 아이템 패턴: 키워드 + 특수 아이템 이름들
+	// 특수 아이템: 검/몽둥이/망치가 아닌 독특한 아이템들 (음식, 일상용품 등)
+	// 히든 아이템: 검/몽둥이/망치/칼이 아닌 모든 특이한 물건
+	// - 음식류: 핫도그, 하리보, 젤리, 과자 등
+	// - 일상용품: 슬리퍼, 주전자, 냄비, 프라이팬, 빗자루, 우산 등
+	// - 악기류: 단소, 리코더, 기타 등
+	// - 기타: 꽃다발, 풍선 등
+	hiddenPattern  = regexp.MustCompile(`(?i)(?:히든|hidden|레전더리|전설|유니크|핫도그|슬리퍼|단소|꽃다발|3초|하리보|젤리|과자|빵|소세지|케이크|초콜릿|사탕|쿠키|도넛|피자|햄버거|치킨|라면|김밥|떡볶이|순대|어묵|붕어빵|호떡|와플|마카롱|타코야키|주전자|냄비|프라이팬|빗자루|우산|리코더|기타|풍선|인형|베개|방망이|국자|뒤집개|삽|곡괭이|호미|괭이|낫|톱)`)
 	trashPattern   = regexp.MustCompile(`(?:일반|노말|커먼|쓰레기|낡은)`)
 	farmPattern    = regexp.MustCompile(`(?:획득|얻었|드랍|뽑기)`)
 
 	// 판매 관련 패턴
 	cantSellPattern   = regexp.MustCompile(`(?:판매할 수 없|가치가 없|팔 수 없)`)
 	newSwordPattern   = regexp.MustCompile(`새로운 검.*획득|검.*획득`)
+
+	// 골드 부족 패턴
+	insufficientGoldPattern = regexp.MustCompile(`골드가\s*부족`)
+	requiredGoldPattern     = regexp.MustCompile(`필요\s*골드[:\s]*(\d{1,3}(?:,\d{3})*)\s*G`)
+	remainingGoldPattern    = regexp.MustCompile(`남은\s*골드[:\s]*(\d{1,3}(?:,\d{3})*)\s*G`)
 
 	// 아이템 이름 추출 패턴 (v2)
 	hiddenNamePattern = regexp.MustCompile(`(?:히든|hidden).*?『([^』]+)』`)
@@ -76,12 +90,13 @@ var (
 	// 괄호 안 아이템: 『용검』, 『불꽃검』
 	bracketItemPattern = regexp.MustCompile(`『([^』]+)』`)
 
-	// 프로필 패턴
+	// 프로필 패턴 (● 접두사 허용, 숫자와 G 사이 공백 허용)
 	profileNamePattern   = regexp.MustCompile(`이름:\s*(@\S+)`)
 	profileWinsPattern   = regexp.MustCompile(`(\d+)승`)
 	profileLossesPattern = regexp.MustCompile(`(\d+)패`)
 	profileGoldPattern   = regexp.MustCompile(`보유\s*골드:\s*(\d{1,3}(?:,\d{3})*)\s*G`)
 	profileSwordPattern  = regexp.MustCompile(`보유\s*검:\s*\[([^\]]+)\]\s*(.+)`)
+	profileBestPattern   = regexp.MustCompile(`최고\s*기록:\s*\[([^\]]+)\]\s*(.+)`)
 
 	// 랭킹 패턴
 	rankingEntryPattern = regexp.MustCompile(`(\d+)위:\s*(@\S+)?\s*\(\[?\+?(\d+)\]?`)
@@ -101,8 +116,28 @@ func ParseOCRText(text string) *GameState {
 		ItemType: "none",
 	}
 
-	text = strings.ToLower(text)
-	lines := strings.Split(text, "\n")
+	textLower := strings.ToLower(text)
+
+	// 먼저 전체 텍스트에서 히든 아이템 감지 (최우선)
+	// 히든 키워드가 어디든 있으면 히든으로 판단
+	if hiddenPattern.MatchString(textLower) {
+		state.ItemType = "hidden"
+		state.ItemName = ExtractItemName(text)
+	} else if trashPattern.MatchString(textLower) {
+		state.ItemType = "trash"
+	}
+
+	// 골드 파싱: "남은 골드" 패턴 우선 (전체 텍스트에서)
+	if matches := remainingGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
+		goldStr := strings.ReplaceAll(matches[1], ",", "")
+		if gold, err := strconv.Atoi(goldStr); err == nil {
+			if ValidateGold(gold) {
+				state.Gold = gold
+			}
+		}
+	}
+
+	lines := strings.Split(textLower, "\n")
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -119,12 +154,30 @@ func ParseOCRText(text string) *GameState {
 			}
 		}
 
-		// 골드 파싱 (범위 검증 포함)
-		if matches := goldPattern.FindStringSubmatch(line); len(matches) > 1 {
-			goldStr := strings.ReplaceAll(matches[1], ",", "")
-			if gold, err := strconv.Atoi(goldStr); err == nil {
-				if ValidateGold(gold) {
-					state.Gold = gold
+		// 골드 파싱: "남은 골드" 또는 "보유 골드"만 현재 골드로 인식
+		// 무시해야 할 패턴:
+		// - "사용 골드: -10G" (소비량)
+		// - "전리품 xxxG를 획득" (배틀 보상, 보유 골드 아님)
+		// - "-숫자G" (음수 표시)
+		if state.Gold == -1 {
+			// "사용 골드" 라인은 무시 (소비량)
+			if strings.Contains(line, "사용") && strings.Contains(line, "골드") {
+				continue
+			}
+			// "전리품" 또는 "획득"이 있는 라인은 무시 (배틀 보상)
+			if strings.Contains(line, "전리품") || strings.Contains(line, "획득") {
+				continue
+			}
+			// 음수 패턴 "-숫자G" 무시
+			if strings.Contains(line, "-") && goldPattern.MatchString(line) {
+				continue
+			}
+			if matches := goldPattern.FindStringSubmatch(line); len(matches) > 1 {
+				goldStr := strings.ReplaceAll(matches[1], ",", "")
+				if gold, err := strconv.Atoi(goldStr); err == nil {
+					if ValidateGold(gold) {
+						state.Gold = gold
+					}
 				}
 			}
 		}
@@ -138,14 +191,17 @@ func ParseOCRText(text string) *GameState {
 			state.LastResult = "hold"
 		}
 
-		// 아이템 타입 및 이름 파싱
+		// 아이템 타입 및 이름 파싱 (전체 텍스트에서 이미 감지 안된 경우만)
 		if farmPattern.MatchString(line) {
-			if hiddenPattern.MatchString(line) {
-				state.ItemType = "hidden"
-			} else if trashPattern.MatchString(line) {
-				state.ItemType = "trash"
-			} else {
-				state.ItemType = "normal" // 일반 아이템
+			// 아직 아이템 타입이 결정 안됐으면 라인 단위로 체크
+			if state.ItemType == "none" {
+				if hiddenPattern.MatchString(line) {
+					state.ItemType = "hidden"
+				} else if trashPattern.MatchString(line) {
+					state.ItemType = "trash"
+				} else {
+					state.ItemType = "normal" // 일반 아이템
+				}
 			}
 
 			// 아이템 이름 추출 시도
@@ -194,6 +250,48 @@ func CannotSell(text string) bool {
 	return cantSellPattern.MatchString(strings.ToLower(text))
 }
 
+// InsufficientGoldInfo 골드 부족 정보
+type InsufficientGoldInfo struct {
+	IsInsufficient bool // 골드 부족 여부
+	RequiredGold   int  // 필요 골드
+	RemainingGold  int  // 남은 골드
+}
+
+// DetectInsufficientGold 골드 부족 메시지 감지
+// "골드가 부족해" 메시지가 있으면 필요 골드와 남은 골드 정보 반환
+func DetectInsufficientGold(text string) *InsufficientGoldInfo {
+	info := &InsufficientGoldInfo{
+		IsInsufficient: false,
+		RequiredGold:   -1,
+		RemainingGold:  -1,
+	}
+
+	// 골드 부족 메시지 감지
+	if !insufficientGoldPattern.MatchString(text) {
+		return info
+	}
+
+	info.IsInsufficient = true
+
+	// 필요 골드 추출
+	if matches := requiredGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
+		goldStr := strings.ReplaceAll(matches[1], ",", "")
+		if gold, err := strconv.Atoi(goldStr); err == nil {
+			info.RequiredGold = gold
+		}
+	}
+
+	// 남은 골드 추출
+	if matches := remainingGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
+		goldStr := strings.ReplaceAll(matches[1], ",", "")
+		if gold, err := strconv.Atoi(goldStr); err == nil {
+			info.RemainingGold = gold
+		}
+	}
+
+	return info
+}
+
 // GotNewSword 새 검 획득 메시지 감지
 func GotNewSword(text string) bool {
 	return newSwordPattern.MatchString(strings.ToLower(text))
@@ -213,11 +311,51 @@ func ExtractLevel(text string) int {
 }
 
 // ExtractGold 골드 추출 (범위 검증 포함)
+// "남은 골드" 또는 "보유 골드"만 현재 골드로 인식
+// 무시: 사용 골드, 전리품 획득, 음수 패턴
 func ExtractGold(text string) int {
+	textLower := strings.ToLower(text)
+
+	// "남은 골드" 패턴 우선 확인
+	if matches := remainingGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
+		goldStr := strings.ReplaceAll(matches[1], ",", "")
+		if gold, err := strconv.Atoi(goldStr); err == nil {
+			if gold >= MinGold && gold <= MaxGold {
+				return gold
+			}
+		}
+	}
+
+	// "보유 골드" 패턴 확인
+	if matches := profileGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
+		goldStr := strings.ReplaceAll(matches[1], ",", "")
+		if gold, err := strconv.Atoi(goldStr); err == nil {
+			if gold >= MinGold && gold <= MaxGold {
+				return gold
+			}
+		}
+	}
+
+	// 무시해야 할 패턴들
+	// 1. "전리품" 또는 "획득" (배틀 보상)
+	if strings.Contains(textLower, "전리품") || strings.Contains(textLower, "획득") {
+		return -1
+	}
+	// 2. "사용 골드" (소비량)
+	if strings.Contains(textLower, "사용") && strings.Contains(textLower, "골드") {
+		return -1
+	}
+	// 3. 음수 패턴 "-숫자G"
+	if strings.Contains(text, "-") && strings.Contains(textLower, "골드") {
+		negativeGoldPattern := regexp.MustCompile(`-\d{1,3}(?:,\d{3})*\s*G`)
+		if negativeGoldPattern.MatchString(text) {
+			return -1
+		}
+	}
+
 	if matches := goldPattern.FindStringSubmatch(text); len(matches) > 1 {
 		goldStr := strings.ReplaceAll(matches[1], ",", "")
 		if gold, err := strconv.Atoi(goldStr); err == nil {
-			// 범위 검증
 			if gold >= MinGold && gold <= MaxGold {
 				return gold
 			}
@@ -240,8 +378,9 @@ func ValidateGold(gold int) bool {
 // /프로필 명령어 결과에서 프로필 정보 추출
 func ParseProfile(text string) *Profile {
 	profile := &Profile{
-		Level: -1,
-		Gold:  -1,
+		Level:     -1,
+		Gold:      -1,
+		BestLevel: -1,
 	}
 
 	// 이름 추출
@@ -261,11 +400,14 @@ func ParseProfile(text string) *Profile {
 		}
 	}
 
-	// 골드 추출
+	// 골드 추출 (음수 불가)
 	if matches := profileGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
 		goldStr := strings.ReplaceAll(matches[1], ",", "")
 		if gold, err := strconv.Atoi(goldStr); err == nil {
-			profile.Gold = gold
+			// 골드는 절대 음수가 될 수 없음
+			if gold >= 0 {
+				profile.Gold = gold
+			}
 		}
 	}
 
@@ -276,6 +418,15 @@ func ParseProfile(text string) *Profile {
 			profile.Level = level
 		}
 		profile.SwordName = strings.TrimSpace(matches[2])
+	}
+
+	// 최고 기록 추출
+	if matches := profileBestPattern.FindStringSubmatch(text); len(matches) > 2 {
+		levelStr := strings.TrimPrefix(matches[1], "+")
+		if level, err := strconv.Atoi(levelStr); err == nil {
+			profile.BestLevel = level
+		}
+		profile.BestSword = strings.TrimSpace(matches[2])
 	}
 
 	// 레벨이 없으면 일반 패턴으로 시도

@@ -56,6 +56,14 @@ type SwordSaleStat struct {
 	Count      int `json:"count"`
 }
 
+// SwordEnhanceStat 검 종류별 강화 통계
+type SwordEnhanceStat struct {
+	Attempts int `json:"attempts"` // 강화 시도
+	Success  int `json:"success"`  // 성공
+	Fail     int `json:"fail"`     // 실패 (유지)
+	Destroy  int `json:"destroy"`  // 파괴
+}
+
 // SessionStats 세션 통계
 type SessionStats struct {
 	StartingGold int `json:"starting_gold"`
@@ -122,6 +130,9 @@ type Stats struct {
 
 	// 검+레벨별 판매 통계: "불꽃검_10" -> SwordSaleStat
 	SwordSaleStats map[string]*SwordSaleStat `json:"sword_sale_stats,omitempty"`
+
+	// 검 종류별 강화 통계: "불꽃검" -> SwordEnhanceStat
+	SwordEnhanceStats map[string]*SwordEnhanceStat `json:"sword_enhance_stats,omitempty"`
 
 	// 세션 통계
 	Session *SessionStats `json:"session,omitempty"`
@@ -243,6 +254,52 @@ func (t *Telemetry) RecordEnhance(level int, result string) {
 	}
 }
 
+// RecordEnhanceWithSword 검 종류 포함 강화 기록
+func (t *Telemetry) RecordEnhanceWithSword(swordName string, level int, result string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled {
+		return
+	}
+
+	// 기존 강화 통계 업데이트
+	t.stats.EnhanceAttempts++
+
+	switch result {
+	case "success":
+		t.stats.EnhanceSuccess++
+		if t.stats.EnhanceByLevel == nil {
+			t.stats.EnhanceByLevel = make(map[int]int)
+		}
+		t.stats.EnhanceByLevel[level]++
+	case "fail", "hold":
+		t.stats.EnhanceFail++
+	case "destroy":
+		t.stats.EnhanceDestroy++
+	}
+
+	// 검 종류별 강화 통계 (v2)
+	if swordName != "" {
+		if t.stats.SwordEnhanceStats == nil {
+			t.stats.SwordEnhanceStats = make(map[string]*SwordEnhanceStat)
+		}
+		if t.stats.SwordEnhanceStats[swordName] == nil {
+			t.stats.SwordEnhanceStats[swordName] = &SwordEnhanceStat{}
+		}
+		stat := t.stats.SwordEnhanceStats[swordName]
+		stat.Attempts++
+
+		switch result {
+		case "success":
+			stat.Success++
+		case "fail", "hold":
+			stat.Fail++
+		case "destroy":
+			stat.Destroy++
+		}
+	}
+}
+
 // RecordBattle 배틀 결과 기록
 func (t *Telemetry) RecordBattle(myLevel, oppLevel int, won bool, goldEarned int) {
 	t.mu.Lock()
@@ -350,8 +407,8 @@ func (t *Telemetry) RecordBattleWithSword(swordName string, myLevel, oppLevel in
 		}
 	}
 
-	// 레벨차별 역배 통계 (v2)
-	if isUpset && levelDiff <= 3 {
+	// 레벨차별 역배 통계 (v2) - 1-20 레벨 차이 지원
+	if isUpset && levelDiff <= 20 {
 		if t.stats.UpsetStatsByDiff == nil {
 			t.stats.UpsetStatsByDiff = make(map[int]*UpsetStat)
 		}
@@ -495,6 +552,34 @@ func (t *Telemetry) RecordGoldChange(currentGold int) {
 	}
 }
 
+// RecordProfile 프로필 정보 기록 (세션 시작 시)
+// 주의: username은 로컬 디버그 로깅에만 사용되며, 서버로 전송되지 않음 (개인정보 보호)
+func (t *Telemetry) RecordProfile(username string, level int, gold int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled {
+		return
+	}
+
+	// 세션 초기화
+	if t.stats.Session == nil {
+		t.stats.Session = &SessionStats{
+			StartingGold: gold,
+			EndingGold:   gold,
+			PeakGold:     gold,
+			LowestGold:   gold,
+		}
+	} else {
+		t.stats.Session.StartingGold = gold
+		t.stats.Session.EndingGold = gold
+		t.stats.Session.PeakGold = gold
+		t.stats.Session.LowestGold = gold
+	}
+
+	// 로그
+	logger.Debug("프로필 기록: %s, +%d, %dG", username, level, gold)
+}
+
 // TrySend 5분 간격으로 서버에 전송 시도
 func (t *Telemetry) TrySend() {
 	t.mu.Lock()
@@ -588,6 +673,13 @@ func (t *Telemetry) copyStats() Stats {
 		for k, v := range t.stats.SwordSaleStats {
 			vc := *v
 			copied.SwordSaleStats[k] = &vc
+		}
+	}
+	if t.stats.SwordEnhanceStats != nil {
+		copied.SwordEnhanceStats = make(map[string]*SwordEnhanceStat)
+		for k, v := range t.stats.SwordEnhanceStats {
+			vc := *v
+			copied.SwordEnhanceStats[k] = &vc
 		}
 	}
 	if t.stats.Session != nil {

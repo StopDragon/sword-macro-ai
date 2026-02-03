@@ -9,17 +9,20 @@ import (
 )
 
 var (
-	user32          = syscall.NewLazyDLL("user32.dll")
-	getCursorPos    = user32.NewProc("GetCursorPos")
-	setCursorPos    = user32.NewProc("SetCursorPos")
-	sendInput       = user32.NewProc("SendInput")
-	openClipboard   = user32.NewProc("OpenClipboard")
-	closeClipboard  = user32.NewProc("CloseClipboard")
-	emptyClipboard  = user32.NewProc("EmptyClipboard")
+	user32           = syscall.NewLazyDLL("user32.dll")
+	kernel32         = syscall.NewLazyDLL("kernel32.dll")
+	getCursorPos     = user32.NewProc("GetCursorPos")
+	setCursorPos     = user32.NewProc("SetCursorPos")
+	sendInput        = user32.NewProc("SendInput")
+	openClipboard    = user32.NewProc("OpenClipboard")
+	closeClipboard   = user32.NewProc("CloseClipboard")
+	emptyClipboard   = user32.NewProc("EmptyClipboard")
 	setClipboardData = user32.NewProc("SetClipboardData")
-	globalAlloc     = syscall.NewLazyDLL("kernel32.dll").NewProc("GlobalAlloc")
-	globalLock      = syscall.NewLazyDLL("kernel32.dll").NewProc("GlobalLock")
-	globalUnlock    = syscall.NewLazyDLL("kernel32.dll").NewProc("GlobalUnlock")
+	getClipboardData = user32.NewProc("GetClipboardData")
+	globalAlloc      = kernel32.NewProc("GlobalAlloc")
+	globalLock       = kernel32.NewProc("GlobalLock")
+	globalUnlock     = kernel32.NewProc("GlobalUnlock")
+	globalSize       = kernel32.NewProc("GlobalSize")
 )
 
 const (
@@ -36,6 +39,9 @@ const (
 	VK_RETURN  = 0x0D
 	VK_CONTROL = 0x11
 	VK_V       = 0x56
+	VK_A       = 0x41
+	VK_C       = 0x43
+	VK_BACK    = 0x08 // Backspace
 
 	CF_UNICODETEXT = 13
 	GMEM_MOVEABLE  = 0x0002
@@ -116,6 +122,14 @@ func pressEnter() {
 	pressKey(VK_RETURN)
 }
 
+func clearInput() {
+	// Ctrl+A (전체 선택)
+	pressKeyWithModifier(VK_A, VK_CONTROL)
+	time.Sleep(50 * time.Millisecond)
+	// Backspace (삭제)
+	pressKey(VK_BACK)
+}
+
 func pressKey(vk uint16) {
 	var inputDown INPUT_KB
 	inputDown.Type = INPUT_KEYBOARD
@@ -188,4 +202,43 @@ func setClipboardText(text string) {
 
 	globalUnlock.Call(hMem)
 	setClipboardData.Call(CF_UNICODETEXT, hMem)
+}
+
+func selectAll() {
+	// Ctrl+A (전체 선택)
+	pressKeyWithModifier(VK_A, VK_CONTROL)
+}
+
+func copySelection() {
+	// Ctrl+C (복사)
+	pressKeyWithModifier(VK_C, VK_CONTROL)
+}
+
+func getClipboard() string {
+	ret, _, _ := openClipboard.Call(0)
+	if ret == 0 {
+		return ""
+	}
+	defer closeClipboard.Call()
+
+	hMem, _, _ := getClipboardData.Call(CF_UNICODETEXT)
+	if hMem == 0 {
+		return ""
+	}
+
+	pMem, _, _ := globalLock.Call(hMem)
+	if pMem == 0 {
+		return ""
+	}
+	defer globalUnlock.Call(hMem)
+
+	// UTF-16 문자열 읽기
+	size, _, _ := globalSize.Call(hMem)
+	if size == 0 {
+		return ""
+	}
+
+	// UTF-16을 Go string으로 변환
+	utf16Slice := (*[1 << 20]uint16)(unsafe.Pointer(pMem))[:size/2:size/2]
+	return syscall.UTF16ToString(utf16Slice)
 }

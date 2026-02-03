@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/StopDragon/sword-macro-ai/internal/config"
@@ -11,6 +12,11 @@ import (
 	"github.com/StopDragon/sword-macro-ai/internal/logger"
 	"github.com/StopDragon/sword-macro-ai/internal/telemetry"
 )
+
+func init() {
+	// macOS에서 Cocoa UI를 사용하려면 메인 스레드 고정 필요
+	runtime.LockOSThread()
+}
 
 const VERSION = "2.0.0"
 

@@ -21,3 +21,7 @@ build/
 
 # Windows
 *.exe
+
+# Build binaries
+sword-api
+sword-macro

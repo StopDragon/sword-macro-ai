@@ -34,6 +34,7 @@ var (
 	procFillRect                   = user32.NewProc("FillRect")
 	procCreateSolidBrush           = gdi32.NewProc("CreateSolidBrush")
 	procInvalidateRect             = user32.NewProc("InvalidateRect")
+	procDrawTextW                  = user32.NewProc("DrawTextW")
 )
 
 const (
@@ -54,6 +55,12 @@ const (
 	PS_SOLID          = 0
 	NULL_BRUSH        = 5
 	TRANSPARENT       = 1
+
+	// DrawText 플래그
+	DT_TOP       = 0x00000000
+	DT_LEFT      = 0x00000000
+	DT_WORDBREAK = 0x00000010
+	DT_NOPREFIX  = 0x00000800 // & 문자를 단축키 표시로 해석하지 않음
 )
 
 type WNDCLASSEXW struct {
@@ -175,9 +182,12 @@ func statusWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		procSetBkMode.Call(hdc, TRANSPARENT)
 		procSetTextColor.Call(hdc, 0xFFFFFF) // White
 
-		// 텍스트 출력
+		// 텍스트 출력 (DrawTextW: 멀티라인 + 자동 줄바꿈 지원)
 		textPtr, _ := syscall.UTF16PtrFromString(statusText)
-		procTextOutW.Call(hdc, 10, 10, uintptr(unsafe.Pointer(textPtr)), uintptr(len(statusText)))
+		textRect := RECT{10, 10, int32(statusW - 10), int32(statusH - 10)}
+		// -1 (0xFFFFFFFF)을 전달하면 null-terminated 문자열로 처리
+		procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(textPtr)), uintptr(0xFFFFFFFF),
+			uintptr(unsafe.Pointer(&textRect)), DT_TOP|DT_LEFT|DT_WORDBREAK|DT_NOPREFIX)
 
 		procSelectObject.Call(hdc, oldFont)
 		procDeleteObject.Call(font)
@@ -293,6 +303,48 @@ func UpdateStatus(format string, args ...interface{}) {
 	}
 }
 
+// ShowStatusOnly 상태 패널 + 채팅/입력 영역 오버레이 표시 (클립보드 모드용)
+// chatW, chatH: 채팅 영역 크기 (380 x 430)
+// inputW, inputH: 입력 영역 크기 (380 x 50)
+// clickX, clickY: 입력창 왼쪽 상단에서 20,20 떨어진 클릭 좌표
+// chatOffsetY: 사용하지 않음 (호환성 유지)
+func ShowStatusOnly(clickX, clickY int, chatOffsetY int, chatW, chatH, inputW, inputH int) {
+	Init()
+
+	// 입력 영역 위치 (초록색) - 클릭 좌표는 입력창 왼쪽 상단에서 20,20 떨어진 곳
+	inputX := clickX - 20
+	inputY := clickY - 20
+
+	// 채팅 영역 위치 (빨간색) - 입력 영역 바로 위에 2픽셀 간격으로 배치
+	chatX := inputX // 입력 영역과 왼쪽 정렬
+	chatY := inputY - 2 - chatH // 입력 영역 상단에서 2픽셀 위로
+
+	// 상태 패널 크기와 위치 (채팅 영역 오른쪽, 높이 430)
+	statusW := 280
+	statusH := 430 // 고정 높이 430
+	statusX := chatX + chatW + 10
+	statusY := chatY
+
+	// 화면 경계 체크
+	if chatX < 50 {
+		chatX = 50
+		inputX = 50
+	}
+	if chatY < 50 {
+		chatY = 50
+		inputY = chatY + chatH + 2
+	}
+
+	// 채팅 영역 표시 (빨간색)
+	ShowOCRRegion(chatX, chatY, chatW, chatH)
+
+	// 입력 영역 표시 (초록색)
+	ShowInputRegion(inputX, inputY, inputW, inputH)
+
+	// 상태 패널 표시
+	ShowStatusPanel(statusX, statusY, statusW, statusH)
+}
+
 // HideAll 모든 오버레이 숨기기
 func HideAll() {
 	if ocrHwnd != 0 {
@@ -314,4 +366,39 @@ func ShowForDuration(x, y, width, height int, duration time.Duration) {
 	Show(x, y, width, height)
 	time.Sleep(duration)
 	Hide()
+}
+
+// ShowControlPanel 컨트롤 패널 표시 (일시정지/종료 버튼)
+// Windows에서는 키보드 핫키(F8/F9) 사용 권장
+func ShowControlPanel(x, y int) {
+	// Windows 구현: 추후 버튼 윈도우 추가 예정
+	// 현재는 F8/F9 핫키 사용
+}
+
+// HideControlPanel 컨트롤 패널 숨기기
+func HideControlPanel() {
+	// Windows 구현: 추후 추가 예정
+}
+
+// CheckPauseClicked 일시정지 버튼 클릭 확인
+func CheckPauseClicked() bool {
+	// Windows에서는 항상 false 반환 (F8 핫키 사용)
+	return false
+}
+
+// CheckStopClicked 종료 버튼 클릭 확인
+func CheckStopClicked() bool {
+	// Windows에서는 항상 false 반환 (F9 핫키 사용)
+	return false
+}
+
+// CheckRestartClicked 재시작 버튼 클릭 확인
+func CheckRestartClicked() bool {
+	// Windows에서는 항상 false 반환 (오버레이 버튼 미구현)
+	return false
+}
+
+// ClearLog 로그 버퍼 초기화
+func ClearLog() {
+	// Windows 구현: 추후 추가 예정
 }

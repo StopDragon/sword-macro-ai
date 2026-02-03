@@ -234,6 +234,62 @@ func CalcExpectedTrials(currentLevel, targetLevel int) float64 {
 	return totalTrials
 }
 
+// CalcOptimalSellLevel 골드 채굴 최적 판매 레벨 계산
+// 강화 확률과 판매가를 고려하여 기대 수익이 가장 높은 레벨 반환
+// currentGold: 현재 보유 골드 (비용 고려용)
+func CalcOptimalSellLevel(currentGold int) int {
+	rates := GetAllEnhanceRates()
+	prices := GetAllSwordPrices()
+
+	if rates == nil || prices == nil {
+		return 10 // 기본값
+	}
+
+	// 각 목표 레벨별 기대 수익 계산
+	bestLevel := 10
+	bestExpectedProfit := 0.0
+
+	// 레벨 5~15 범위에서 최적 레벨 탐색
+	for targetLevel := 5; targetLevel <= 15 && targetLevel < len(prices); targetLevel++ {
+		// 0강에서 targetLevel까지 성공 확률
+		successChance := 1.0
+		for level := 0; level < targetLevel && level < len(rates); level++ {
+			successChance *= rates[level].SuccessRate / 100.0
+		}
+
+		// 목표 레벨의 판매가
+		price := prices[targetLevel].AvgPrice
+
+		// 기대 수익 = 성공 확률 × 판매가
+		expectedProfit := successChance * float64(price)
+
+		// 레벨이 높아질수록 시간 비용이 증가하므로 페널티 적용
+		// (레벨당 약 5% 시간 비용 추가로 가정)
+		timePenalty := 1.0 - float64(targetLevel-5)*0.02
+
+		adjustedProfit := expectedProfit * timePenalty
+
+		if adjustedProfit > bestExpectedProfit {
+			bestExpectedProfit = adjustedProfit
+			bestLevel = targetLevel
+		}
+	}
+
+	return bestLevel
+}
+
+// GetOptimalSellLevel 서버 통계 기반 최적 판매 레벨 조회
+// 서버에서 커뮤니티 데이터 기반 추천값이 있으면 사용, 없으면 로컬 계산
+func GetOptimalSellLevel(currentGold int) (level int, source string) {
+	// TODO: 서버 API (GET /api/strategy/optimal-sell-point) 추가 시 여기서 호출
+	// 현재는 로컬 계산 사용
+
+	level = CalcOptimalSellLevel(currentGold)
+	source = "계산값"
+
+	return level, source
+}
+
 // FormatGold 골드를 읽기 쉽게 포맷
 func FormatGold(gold int) string {
 	if gold >= 100000000 {

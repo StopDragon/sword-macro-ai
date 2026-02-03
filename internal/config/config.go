@@ -31,10 +31,14 @@ type Config struct {
 	BattleCooldown  float64 `json:"battle_cooldown"`   // 배틀 간 쿨다운 (초)
 	BattleMinGold   int     `json:"battle_min_gold"`   // 최소 보유 골드 (이하면 중단)
 
-	// 캡처 영역
-	CaptureW  int `json:"capture_w"`
-	CaptureH  int `json:"capture_h"`
-	InputBoxH int `json:"input_box_h"`
+	// 클립보드 텍스트 읽기
+	ChatOffsetY int `json:"chat_offset_y"` // 입력창에서 채팅 영역까지 거리 (픽셀)
+
+	// 오버레이 설정
+	OverlayChatWidth  int `json:"overlay_chat_width"`  // 채팅 영역 너비
+	OverlayChatHeight int `json:"overlay_chat_height"` // 채팅 영역 높이
+	OverlayInputWidth int `json:"overlay_input_width"` // 입력 영역 너비
+	OverlayInputHeight int `json:"overlay_input_height"` // 입력 영역 높이
 }
 
 // Default 기본 설정 반환
@@ -53,9 +57,12 @@ func Default() *Config {
 		BattleLevelDiff: 2,
 		BattleCooldown:  5.0,
 		BattleMinGold:   1000,
-		CaptureW:        375,
-		CaptureH:        550,
-		InputBoxH:       80,
+		ChatOffsetY:     40, // 입력창 클릭 좌표에서 40픽셀 위 (채팅 영역 클릭용)
+		// 오버레이 기본값
+		OverlayChatWidth:   380,
+		OverlayChatHeight:  430,
+		OverlayInputWidth:  380,
+		OverlayInputHeight: 50,
 	}
 }
 

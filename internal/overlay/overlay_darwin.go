@@ -13,7 +13,13 @@ static NSWindow *ocrWindow = nil;
 static NSWindow *inputWindow = nil;
 static NSWindow *statusWindow = nil;
 static NSTextField *statusLabel = nil;
+static NSWindow *controlWindow = nil;
 static BOOL appInitialized = NO;
+
+// 버튼 클릭 상태 (Go에서 폴링)
+static volatile int pauseClicked = 0;
+static volatile int stopClicked = 0;
+static volatile int restartClicked = 0;
 
 // Run loop pump - CLI 앱에서 Cocoa 이벤트 처리
 void PumpRunLoop() {
@@ -119,6 +125,11 @@ void ShowStatusPanel(int x, int y, int width, int height) {
         [statusLabel setSelectable:NO];
         [statusLabel setTextColor:[NSColor whiteColor]];
         [statusLabel setFont:[NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightMedium]];
+        // 멀티라인 지원
+        [statusLabel setLineBreakMode:NSLineBreakByWordWrapping];
+        [statusLabel setMaximumNumberOfLines:0];  // 0 = 무제한
+        [[statusLabel cell] setWraps:YES];
+        [[statusLabel cell] setScrollable:NO];
         [statusLabel setStringValue:@"🎮 대기 중..."];
 
         [[statusWindow contentView] addSubview:statusLabel];
@@ -126,13 +137,16 @@ void ShowStatusPanel(int x, int y, int width, int height) {
     }
 }
 
-// 상태 텍스트 업데이트
+// 상태 텍스트 업데이트 (동기 방식 - CLI 앱에서 dispatch_async는 동작하지 않음)
 void UpdateStatus(const char *text) {
     @autoreleasepool {
-        if (statusLabel != nil) {
+        if (statusLabel != nil && statusWindow != nil) {
             NSString *nsText = [NSString stringWithUTF8String:text];
+            // CLI 앱에서는 dispatch_async가 제대로 동작하지 않으므로 직접 업데이트
             [statusLabel setStringValue:nsText];
+            [statusLabel setNeedsDisplay:YES];
             [statusWindow display];
+            [statusWindow orderFrontRegardless];
         }
     }
 }
@@ -153,6 +167,10 @@ void HideAllOverlays() {
             statusWindow = nil;
             statusLabel = nil;
         }
+        if (controlWindow != nil) {
+            [controlWindow close];
+            controlWindow = nil;
+        }
     }
 }
 
@@ -165,15 +183,144 @@ void InitApp() {
         }
     }
 }
+
+// 버튼 클릭 핸들러 클래스
+@interface ButtonHandler : NSObject
+- (void)pauseClicked:(id)sender;
+- (void)stopClicked:(id)sender;
+- (void)restartClicked:(id)sender;
+@end
+
+@implementation ButtonHandler
+- (void)pauseClicked:(id)sender {
+    pauseClicked = 1;
+}
+- (void)stopClicked:(id)sender {
+    stopClicked = 1;
+}
+- (void)restartClicked:(id)sender {
+    restartClicked = 1;
+}
+@end
+
+static ButtonHandler *buttonHandler = nil;
+
+// 컨트롤 패널 표시 (일시정지/재시작/종료 버튼) - 가로 배치
+void ShowControlPanel(int x, int y) {
+    @autoreleasepool {
+        if (controlWindow != nil) {
+            [controlWindow close];
+            controlWindow = nil;
+        }
+
+        if (buttonHandler == nil) {
+            buttonHandler = [[ButtonHandler alloc] init];
+        }
+
+        // 패널 크기 (가로 배치, 버튼 3개)
+        int width = 310;
+        int height = 35;
+
+        // 화면 좌표 변환
+        NSRect frame = NSMakeRect(x, [[NSScreen mainScreen] frame].size.height - y - height, width, height);
+
+        controlWindow = [[NSWindow alloc]
+            initWithContentRect:frame
+            styleMask:NSWindowStyleMaskBorderless
+            backing:NSBackingStoreBuffered
+            defer:NO];
+
+        [controlWindow setLevel:NSScreenSaverWindowLevel];
+        [controlWindow setBackgroundColor:[NSColor colorWithRed:0.2 green:0.2 blue:0.2 alpha:0.95]];
+        [controlWindow setOpaque:NO];
+        [controlWindow setIgnoresMouseEvents:NO]; // 마우스 이벤트 허용
+        [controlWindow setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary];
+
+        // 일시정지 버튼 (왼쪽)
+        NSButton *pauseBtn = [[NSButton alloc] initWithFrame:NSMakeRect(5, 5, 95, 25)];
+        [pauseBtn setTitle:@"⏸ 일시정지"];
+        [pauseBtn setBezelStyle:NSBezelStyleRounded];
+        [pauseBtn setTarget:buttonHandler];
+        [pauseBtn setAction:@selector(pauseClicked:)];
+        [[controlWindow contentView] addSubview:pauseBtn];
+
+        // 재시작 버튼 (가운데)
+        NSButton *restartBtn = [[NSButton alloc] initWithFrame:NSMakeRect(105, 5, 95, 25)];
+        [restartBtn setTitle:@"🔄 재시작"];
+        [restartBtn setBezelStyle:NSBezelStyleRounded];
+        [restartBtn setTarget:buttonHandler];
+        [restartBtn setAction:@selector(restartClicked:)];
+        [[controlWindow contentView] addSubview:restartBtn];
+
+        // 종료 버튼 (오른쪽)
+        NSButton *stopBtn = [[NSButton alloc] initWithFrame:NSMakeRect(205, 5, 95, 25)];
+        [stopBtn setTitle:@"⏹ 종료"];
+        [stopBtn setBezelStyle:NSBezelStyleRounded];
+        [stopBtn setTarget:buttonHandler];
+        [stopBtn setAction:@selector(stopClicked:)];
+        [[controlWindow contentView] addSubview:stopBtn];
+
+        [controlWindow orderFrontRegardless];
+
+        // 버튼 상태 초기화
+        pauseClicked = 0;
+        stopClicked = 0;
+        restartClicked = 0;
+    }
+}
+
+// 버튼 클릭 상태 확인
+int CheckPauseClicked() {
+    if (pauseClicked) {
+        pauseClicked = 0;
+        return 1;
+    }
+    return 0;
+}
+
+int CheckStopClicked() {
+    if (stopClicked) {
+        stopClicked = 0;
+        return 1;
+    }
+    return 0;
+}
+
+int CheckRestartClicked() {
+    if (restartClicked) {
+        restartClicked = 0;
+        return 1;
+    }
+    return 0;
+}
+
+// 컨트롤 패널 숨기기
+void HideControlPanel() {
+    @autoreleasepool {
+        if (controlWindow != nil) {
+            [controlWindow close];
+            controlWindow = nil;
+        }
+    }
+}
 */
 import "C"
 import (
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 	"unsafe"
 )
 
 var initialized = false
+
+// 로그 버퍼 (CLI 터미널 스타일)
+var (
+	logBuffer    []string
+	logMutex     sync.Mutex
+	maxLogLines  = 25 // 상태 패널에 표시할 최대 라인 수
+)
 
 // Init 오버레이 시스템 초기화
 func Init() {
@@ -239,11 +386,11 @@ func ShowAll(ocrX, ocrY, ocrW, ocrH, inputX, inputY, inputW, inputH int) {
 	// 입력창 영역 (초록색)
 	C.ShowInputRegion(C.int(inputX), C.int(inputY), C.int(inputW), C.int(inputH))
 
-	// 상태 패널 (OCR 영역 오른쪽)
+	// 상태 패널 (OCR 영역 오른쪽, OCR과 같은 높이)
 	statusX := ocrX + ocrW + 10
 	statusY := ocrY
 	statusW := 280
-	statusH := 150
+	statusH := ocrH // OCR 영역과 동일한 높이
 	C.ShowStatusPanel(C.int(statusX), C.int(statusY), C.int(statusW), C.int(statusH))
 
 	// 이벤트 처리
@@ -252,18 +399,108 @@ func ShowAll(ocrX, ocrY, ocrW, ocrH, inputX, inputY, inputW, inputH int) {
 	pumpEvents()
 }
 
-// UpdateStatus 상태 텍스트 업데이트
+// UpdateStatus 상태 텍스트 업데이트 (로그 스타일 - 아래에서 위로 쌓임)
 func UpdateStatus(format string, args ...interface{}) {
+	if !initialized {
+		return // 초기화되지 않았으면 무시
+	}
 	text := fmt.Sprintf(format, args...)
-	cText := C.CString(text)
+
+	logMutex.Lock()
+	// 새 텍스트의 각 라인을 버퍼에 추가
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		if line != "" { // 빈 라인 제외
+			logBuffer = append(logBuffer, line)
+		}
+	}
+	// 빈 라인 하나 추가 (메시지 구분)
+	logBuffer = append(logBuffer, "")
+
+	// 최대 라인 수 유지 (오래된 것부터 제거)
+	if len(logBuffer) > maxLogLines {
+		logBuffer = logBuffer[len(logBuffer)-maxLogLines:]
+	}
+
+	// 버퍼 전체를 하나의 텍스트로 합침
+	displayText := strings.Join(logBuffer, "\n")
+	logMutex.Unlock()
+
+	cText := C.CString(displayText)
 	C.UpdateStatus(cText)
 	C.free(unsafe.Pointer(cText))
+	// 여러 번 이벤트 처리하여 UI 업데이트 보장
+	pumpEvents()
+	time.Sleep(10 * time.Millisecond)
+	pumpEvents()
+}
+
+// ClearLog 로그 버퍼 초기화
+func ClearLog() {
+	logMutex.Lock()
+	logBuffer = nil
+	logMutex.Unlock()
+}
+
+// ShowStatusOnly 상태 패널 + 채팅/입력 영역 오버레이 표시 (클립보드 모드용)
+// chatW, chatH: 채팅 영역 크기 (380 x 430)
+// inputW, inputH: 입력 영역 크기 (380 x 50)
+// clickX, clickY: 입력창 왼쪽 상단에서 20,20 떨어진 클릭 좌표
+// chatOffsetY: 사용하지 않음 (호환성 유지)
+func ShowStatusOnly(clickX, clickY int, chatOffsetY int, chatW, chatH, inputW, inputH int) {
+	if !initialized {
+		Init()
+	}
+	ClearLog() // 새 세션 시작 시 로그 버퍼 초기화
+
+	// 입력 영역 위치 (초록색) - 클릭 좌표는 입력창 왼쪽 상단에서 20,20 떨어진 곳
+	inputX := clickX - 20
+	inputY := clickY - 20
+
+	// 채팅 영역 위치 (빨간색) - 입력 영역 바로 위에 2픽셀 간격으로 배치
+	chatX := inputX // 입력 영역과 왼쪽 정렬
+	chatY := inputY - 2 - chatH // 입력 영역 상단에서 2픽셀 위로
+
+	// 상태 패널 크기와 위치 (채팅 영역 오른쪽, 높이 430)
+	statusW := 280
+	statusH := 430 // 고정 높이 430
+	statusX := chatX + chatW + 10
+	statusY := chatY
+
+	// 화면 경계 체크 (최소 50픽셀 여백 유지)
+	if chatX < 50 {
+		chatX = 50
+		inputX = 50
+	}
+	if chatY < 50 {
+		chatY = 50
+		inputY = chatY + chatH + 2
+	}
+
+	// 채팅 영역 표시 (빨간색)
+	C.ShowOCRRegion(C.int(chatX), C.int(chatY), C.int(chatW), C.int(chatH))
+
+	// 입력 영역 표시 (초록색)
+	C.ShowInputRegion(C.int(inputX), C.int(inputY), C.int(inputW), C.int(inputH))
+
+	// 상태 패널 표시
+	C.ShowStatusPanel(C.int(statusX), C.int(statusY), C.int(statusW), C.int(statusH))
+
+	// 컨트롤 패널 표시 (입력 영역 아래 10픽셀, 왼쪽 정렬)
+	controlX := inputX // 입력 영역과 왼쪽 정렬
+	controlY := inputY + inputH + 10 // 입력 영역 아래 10픽셀
+	C.ShowControlPanel(C.int(controlX), C.int(controlY))
+
+	// 이벤트 처리 (충분한 시간 확보)
+	pumpEvents()
+	time.Sleep(150 * time.Millisecond)
 	pumpEvents()
 }
 
 // HideAll 모든 오버레이 숨기기
 func HideAll() {
 	C.HideAllOverlays()
+	ClearLog() // 로그 버퍼 초기화
 	pumpEvents()
 }
 
@@ -272,4 +509,42 @@ func ShowForDuration(x, y, width, height int, duration time.Duration) {
 	Show(x, y, width, height)
 	time.Sleep(duration)
 	Hide()
+}
+
+// ShowControlPanel 컨트롤 패널 표시 (일시정지/종료 버튼)
+func ShowControlPanel(x, y int) {
+	if !initialized {
+		Init()
+	}
+	C.ShowControlPanel(C.int(x), C.int(y))
+	pumpEvents()
+	time.Sleep(100 * time.Millisecond)
+	pumpEvents()
+}
+
+// HideControlPanel 컨트롤 패널 숨기기
+func HideControlPanel() {
+	C.HideControlPanel()
+	pumpEvents()
+}
+
+// CheckPauseClicked 일시정지 버튼 클릭 확인
+func CheckPauseClicked() bool {
+	pumpEvents()
+	result := C.CheckPauseClicked()
+	return result != 0
+}
+
+// CheckStopClicked 종료 버튼 클릭 확인
+func CheckStopClicked() bool {
+	pumpEvents()
+	result := C.CheckStopClicked()
+	return result != 0
+}
+
+// CheckRestartClicked 재시작 버튼 클릭 확인
+func CheckRestartClicked() bool {
+	pumpEvents()
+	result := C.CheckRestartClicked()
+	return result != 0
 }
