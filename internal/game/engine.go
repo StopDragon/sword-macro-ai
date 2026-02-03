@@ -458,41 +458,52 @@ func (e *Engine) loopHidden() {
 			return
 		}
 
-		// 파밍
-		e.sendCommand("/파밍")
+		// 1. /판매 시도 (현재 검 팔고 새 검 받기)
+		e.sendCommand("/판매")
 		time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 
 		// OCR로 결과 확인
 		text := e.readOCRText()
+
+		// 2. 판매 불가 체크 (0강 아이템)
+		if CannotSell(text) {
+			e.sendCommand("/강화")
+			time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
+			continue
+		}
+
 		state := ParseOCRText(text)
+		if state == nil {
+			e.sendCommand("/강화")
+			time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
+			continue
+		}
 
-		if state != nil {
-			// v2: 아이템 이름 추출
-			itemName := state.ItemName
-			if itemName == "" {
-				itemName = ExtractItemName(text)
-			}
+		// v2: 아이템 이름 추출
+		itemName := state.ItemName
+		if itemName == "" {
+			itemName = ExtractItemName(text)
+		}
 
-			if state.ItemType == "hidden" {
-				fmt.Printf("\n🎉 히든 아이템 발견! [%s]\n", itemName)
-				logger.Info("히든 아이템 발견: %s", itemName)
+		// 3. 히든이면 성공
+		if state.ItemType == "hidden" {
+			fmt.Printf("\n🎉 히든 아이템 발견! [%s]\n", itemName)
+			logger.Info("히든 아이템 발견: %s", itemName)
 
-				// v2 텔레메트리: 아이템 이름 포함
-				e.telem.RecordFarmingWithItem(itemName, "hidden")
-				e.telem.RecordSword()
-				e.telem.TrySend()
-				e.sessionStats.hiddenCount++
-				return
-			}
+			// v2 텔레메트리: 아이템 이름 포함
+			e.telem.RecordFarmingWithItem(itemName, "hidden")
+			e.telem.RecordSword()
+			e.telem.TrySend()
+			e.sessionStats.hiddenCount++
+			return
+		}
 
-			// 트래시면 판매
-			if state.ItemType == "trash" || state.ItemType == "normal" {
-				// v2 텔레메트리
-				e.telem.RecordFarmingWithItem(itemName, state.ItemType)
-				e.sessionStats.trashCount++
-				e.sendCommand("/판매")
-				time.Sleep(500 * time.Millisecond)
-			}
+		// 4. 트래시/일반이면 /강화로 파괴
+		if state.ItemType == "trash" || state.ItemType == "normal" || state.ItemType == "unknown" {
+			e.telem.RecordFarmingWithItem(itemName, state.ItemType)
+			e.sessionStats.trashCount++
+			e.sendCommand("/강화")
+			time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 		}
 	}
 }
@@ -687,37 +698,57 @@ func (e *Engine) farmUntilHidden() bool {
 }
 
 // farmUntilHiddenWithName 히든 아이템을 찾을 때까지 파밍하고 아이템 이름 반환
+// 로직: /판매 → OCR → 트래시면 /강화(파괴) → 반복, 히든이면 반환
 func (e *Engine) farmUntilHiddenWithName() (string, bool) {
 	for e.running {
 		if e.checkStop() {
 			return "", false
 		}
 
-		e.sendCommand("/파밍")
+		// 1. /판매 시도 (현재 검 팔고 새 검 받기)
+		e.sendCommand("/판매")
 		time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 
 		text := e.readOCRText()
-		state := ParseOCRText(text)
-		if state != nil {
-			// v2: 아이템 이름 추출
-			itemName := state.ItemName
-			if itemName == "" {
-				itemName = ExtractItemName(text)
-			}
 
-			if state.ItemType == "hidden" {
-				// v2 텔레메트리
-				e.telem.RecordFarmingWithItem(itemName, "hidden")
-				e.sessionStats.hiddenCount++
-				return itemName, true
-			}
-			if state.ItemType == "trash" || state.ItemType == "normal" {
-				// v2 텔레메트리
-				e.telem.RecordFarmingWithItem(itemName, state.ItemType)
-				e.sessionStats.trashCount++
-				e.sendCommand("/판매")
-				time.Sleep(300 * time.Millisecond)
-			}
+		// 2. 판매 불가 체크 (0강 아이템은 판매 불가)
+		if CannotSell(text) {
+			// 0강 아이템은 /강화로 파괴
+			e.sendCommand("/강화")
+			time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
+			continue
+		}
+
+		// 3. 새 검 획득 체크
+		state := ParseOCRText(text)
+		if state == nil {
+			// OCR 실패 시 /강화 시도
+			e.sendCommand("/강화")
+			time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
+			continue
+		}
+
+		// v2: 아이템 이름 추출
+		itemName := state.ItemName
+		if itemName == "" {
+			itemName = ExtractItemName(text)
+		}
+
+		// 4. 히든 아이템이면 반환 (강화 모드로 전환)
+		if state.ItemType == "hidden" {
+			e.telem.RecordFarmingWithItem(itemName, "hidden")
+			e.sessionStats.hiddenCount++
+			fmt.Printf("🎉 히든 발견! [%s]\n", itemName)
+			return itemName, true
+		}
+
+		// 5. 트래시/일반 아이템이면 /강화로 파괴하고 반복
+		if state.ItemType == "trash" || state.ItemType == "normal" || state.ItemType == "unknown" {
+			e.telem.RecordFarmingWithItem(itemName, state.ItemType)
+			e.sessionStats.trashCount++
+			// 트래시는 /강화로 파괴 (0강이므로 바로 파괴됨)
+			e.sendCommand("/강화")
+			time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 		}
 	}
 	return "", false

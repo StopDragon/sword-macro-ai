@@ -61,8 +61,12 @@ var (
 	holdPattern    = regexp.MustCompile(`(?:강화.*유지|레벨.*유지|실패.*유지)`)
 	destroyPattern = regexp.MustCompile(`(?:파괴|부서|사라)`)
 	hiddenPattern  = regexp.MustCompile(`(?:히든|hidden|레전더리|전설|유니크)`)
-	trashPattern   = regexp.MustCompile(`(?:일반|노말|커먼|쓰레기)`)
+	trashPattern   = regexp.MustCompile(`(?:일반|노말|커먼|쓰레기|낡은)`)
 	farmPattern    = regexp.MustCompile(`(?:획득|얻었|드랍|뽑기)`)
+
+	// 판매 관련 패턴
+	cantSellPattern   = regexp.MustCompile(`(?:판매할 수 없|가치가 없|팔 수 없)`)
+	newSwordPattern   = regexp.MustCompile(`새로운 검.*획득|검.*획득`)
 
 	// 아이템 이름 추출 패턴 (v2)
 	hiddenNamePattern = regexp.MustCompile(`(?:히든|hidden).*?『([^』]+)』`)
@@ -183,6 +187,16 @@ func DetectItemType(text string) string {
 	}
 
 	return "unknown"
+}
+
+// CannotSell 판매 불가 메시지 감지 (0강 아이템)
+func CannotSell(text string) bool {
+	return cantSellPattern.MatchString(strings.ToLower(text))
+}
+
+// GotNewSword 새 검 획득 메시지 감지
+func GotNewSword(text string) bool {
+	return newSwordPattern.MatchString(strings.ToLower(text))
 }
 
 // ExtractLevel 레벨 추출 (범위 검증 포함)
