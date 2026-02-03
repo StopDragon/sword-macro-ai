@@ -277,19 +277,28 @@ func (e *Engine) CheckProfileFull() *Profile {
 }
 
 // CheckOtherProfile 다른 유저의 프로필 정보 조회
-// /프로필 @유저명 명령어로 해당 유저의 레벨, 검 정보 등을 조회
+// 카카오톡: Enter 1번 = 줄바꿈, Enter 2번 = 전송
+// 1단계: "/프로" + Enter(줄바꿈)
+// 2단계: "@유저명" + Enter 2번(전송)
 func (e *Engine) CheckOtherProfile(username string) *Profile {
-	// 이전 채팅 기록 초기화하여 새 응답 감지 보장
-	e.ResetLastChatText()
+	// 명령어 전송 전 현재 채팅 저장 (새 응답만 감지하기 위해)
+	e.SaveLastChatText()
 
-	e.sendCommand("/프로필 " + username)
-	profileText := e.waitForResponse(3 * time.Second)
+	// 1단계: /프로 + Enter(줄바꿈만)
+	e.sendCommandOnce("/프로")
+
+	// 2단계: @유저명 + Enter 2번(전송)
+	e.appendAndSend(username)
+
+	// 다른 유저 프로필은 내 이름이 없으므로 필터 없이 읽기
+	profileText := e.waitForResponseRaw(3 * time.Second)
 
 	if profileText == "" {
 		return nil
 	}
 
-	return ParseProfile(profileText)
+	// 해당 유저의 프로필 섹션만 파싱 (다른 유저/본인 프로필 무시)
+	return ParseProfileForUser(profileText, username)
 }
 
 // PrintEnhanceRateTable 강화 확률표 출력

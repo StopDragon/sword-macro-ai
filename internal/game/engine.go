@@ -554,28 +554,26 @@ func (e *Engine) printSessionStats() {
 }
 
 func (e *Engine) loopEnhance() {
-	// 1. 시작 전 프로필 체크 (공통 헬퍼 사용)
-	overlay.UpdateStatus("⚔️ 강화 모드\n목표: +%d\n\n📋 프로필 확인 중...", e.targetLevel)
-	fmt.Println("📊 현재 검 상태 확인 중...")
+	// 시작 시 프로필 정보 표시 (Run()에서 이미 조회한 sessionProfile 사용)
+	// 중복 /프로필 전송 방지
+	overlay.UpdateStatus("⚔️ 강화 모드\n목표: +%d", e.targetLevel)
 
-	profile := e.CheckProfileLevel()
+	if e.sessionProfile != nil && e.sessionProfile.SwordName != "" {
+		fmt.Printf("📋 현재 보유 검: [+%d] %s\n", e.sessionProfile.Level, e.sessionProfile.SwordName)
 
-	if profile.OK {
-		fmt.Printf("📋 현재 보유 검: [+%d] %s\n", profile.Level, profile.SwordName)
-
-		// 2. 이미 목표 달성한 경우 종료 (공통 헬퍼 사용)
-		if e.IsTargetReached(profile.Level) {
-			fmt.Printf("\n✅ 이미 목표 달성! 현재 +%d (목표: +%d)\n", profile.Level, e.targetLevel)
+		// 이미 목표 달성한 경우 종료
+		if e.IsTargetReached(e.sessionProfile.Level) {
+			fmt.Printf("\n✅ 이미 목표 달성! 현재 +%d (목표: +%d)\n", e.sessionProfile.Level, e.targetLevel)
 			fmt.Println("💡 강화할 필요가 없습니다. 메뉴로 돌아갑니다.")
-			overlay.UpdateStatus("⚔️ 강화 불필요\n✅ 이미 +%d 보유!\n목표: +%d\n\n📋 판단: 목표 이미 달성", profile.Level, e.targetLevel)
+			overlay.UpdateStatus("⚔️ 강화 불필요\n✅ 이미 +%d 보유!\n목표: +%d\n\n📋 판단: 목표 이미 달성", e.sessionProfile.Level, e.targetLevel)
 			time.Sleep(2 * time.Second)
 			return
 		}
 
 		// 현재 레벨이 0보다 크면 기존 검으로 계속 강화
-		if profile.Level > 0 {
-			fmt.Printf("📈 현재 +%d에서 목표 +%d까지 강화를 시작합니다.\n", profile.Level, e.targetLevel)
-			overlay.UpdateStatus("⚔️ 강화 모드\n현재: +%d → 목표: +%d\n[%s]\n\n📋 판단: 기존 검 강화 계속", profile.Level, e.targetLevel, profile.SwordName)
+		if e.sessionProfile.Level > 0 {
+			fmt.Printf("📈 현재 +%d에서 목표 +%d까지 강화를 시작합니다.\n", e.sessionProfile.Level, e.targetLevel)
+			overlay.UpdateStatus("⚔️ 강화 모드\n현재: +%d → 목표: +%d\n[%s]\n\n📋 판단: 기존 검 강화 계속", e.sessionProfile.Level, e.targetLevel, e.sessionProfile.SwordName)
 		} else {
 			fmt.Printf("📈 +0에서 목표 +%d까지 강화를 시작합니다.\n", e.targetLevel)
 			overlay.UpdateStatus("⚔️ 강화 모드\n현재: +0 → 목표: +%d\n\n📋 판단: 새 검 강화 시작", e.targetLevel)
@@ -817,16 +815,26 @@ func (e *Engine) loopGoldMine() {
 	e.telem.InitSession(startGold)
 	overlay.UpdateStatus("💰 골드 채굴 모드\n목표: +%d\n사이클: 0\n수익: 0G", e.targetLevel)
 
-	// 시작 시 프로필 체크 (공통 헬퍼 사용 - loopEnhance와 동일)
-	fmt.Println("📊 현재 검 상태 확인 중...")
-	profile := e.CheckProfileLevel()
-	if profile.OK {
-		fmt.Printf("📋 현재 보유 검: [+%d] %s\n", profile.Level, profile.SwordName)
+	// 시작 시 프로필 정보 표시 (Run()에서 이미 조회한 sessionProfile 사용)
+	// 중복 /프로필 전송 방지
+	if e.sessionProfile != nil && e.sessionProfile.SwordName != "" {
+		fmt.Printf("📋 현재 보유 검: [+%d] %s\n", e.sessionProfile.Level, e.sessionProfile.SwordName)
 
-		// 이미 목표 달성한 경우 바로 판매
-		if e.IsTargetReached(profile.Level) {
-			fmt.Printf("✅ 이미 목표 달성! 현재 +%d → 바로 판매\n", profile.Level)
-			overlay.UpdateStatus("💰 골드 채굴\n✅ 이미 +%d 보유!\n💵 판매 진행", profile.Level)
+		// 아이템 타입 확인
+		itemType := DetermineItemType(e.sessionProfile.SwordName)
+		fmt.Printf("   아이템 타입: %s\n", GetItemTypeLabel(itemType))
+
+		// 이미 목표 달성한 경우 바로 판매 (일반 아이템만)
+		if e.IsTargetReached(e.sessionProfile.Level) {
+			if itemType == "special" {
+				fmt.Printf("✅ 목표 달성! 특수 아이템 [%s] +%d → 보관\n", e.sessionProfile.SwordName, e.sessionProfile.Level)
+				overlay.UpdateStatus("💰 골드 채굴\n✅ 특수 +%d 보관!", e.sessionProfile.Level)
+				e.telem.TrySend()
+				return // 특수 아이템은 판매하지 않음
+			}
+
+			fmt.Printf("✅ 이미 목표 달성! 현재 +%d → 바로 판매\n", e.sessionProfile.Level)
+			overlay.UpdateStatus("💰 골드 채굴\n✅ 이미 +%d 보유!\n💵 판매 진행", e.sessionProfile.Level)
 			e.sendCommand("/판매")
 			saleText := e.readChatTextWaitForChange(5 * time.Second)
 			saleResult := ExtractSaleResult(saleText)
@@ -999,14 +1007,16 @@ func (e *Engine) loopGoldMine() {
 
 func (e *Engine) loopBattle() {
 	fmt.Println()
-	fmt.Println("📊 프로필 확인 중...")
 
-	// 1. 내 프로필 확인 (공통 헬퍼 사용)
-	e.myProfile = e.CheckProfileFull()
-	if e.myProfile == nil || e.myProfile.Level < 0 {
+	// 시작 시 프로필 정보 표시 (Run()에서 이미 조회한 sessionProfile 사용)
+	// 중복 /프로필 전송 방지
+	if e.sessionProfile == nil || e.sessionProfile.Level < 0 {
 		fmt.Println("❌ 프로필을 읽을 수 없습니다. 다시 시도하세요.")
 		return
 	}
+
+	// 배틀 모드에서 사용할 myProfile에 sessionProfile 복사
+	e.myProfile = e.sessionProfile
 
 	fmt.Printf("📋 내 프로필: +%d %s (%d승 %d패)\n",
 		e.myProfile.Level, e.myProfile.SwordName, e.myProfile.Wins, e.myProfile.Losses)
@@ -1018,6 +1028,9 @@ func (e *Engine) loopBattle() {
 	startGold := e.readCurrentGold()
 	e.telem.InitSession(startGold)
 
+	// 적합한 타겟 목록 (배틀 루프 밖에서 유지, 소진되면 다시 조회)
+	var candidates []*RankingEntry
+
 	// 배틀 루프
 	for e.running {
 		if e.checkStop() {
@@ -1026,73 +1039,122 @@ func (e *Engine) loopBattle() {
 
 		e.cycleCount++
 
-		// 2. 랭킹에서 유저 목록 가져오기
-		e.sendCommand("/랭킹")
-		time.Sleep(2 * time.Second)
+		// 타겟 목록이 비었으면 새로 조회
+		if len(candidates) == 0 {
+			fmt.Println("🔄 타겟 목록 갱신 중...")
 
-		rankingText := e.readChatText()
-		entries := ParseRanking(rankingText)
-		usernames := ExtractUsernamesFromRanking(entries)
+			// 2. 랭킹에서 유저 목록 가져오기
+			e.sendCommand("/랭킹")
+			time.Sleep(2 * time.Second)
 
-		if len(usernames) == 0 {
-			fmt.Println("⏳ 랭킹에서 유저를 찾을 수 없음, 30초 후 재시도...")
-			time.Sleep(30 * time.Second)
-			continue
-		}
+			// 랭킹은 다른 유저 이름이 포함되므로 필터링 없이 읽기
+			rankingText := e.readChatClipboard()
+			entries := ParseRanking(rankingText)
+			usernames := ExtractUsernamesFromRanking(entries)
 
-		// 3. 각 유저의 프로필 확인하여 적합한 타겟 찾기
-		var target *RankingEntry
-		minTarget := e.myProfile.Level + 1
-		maxTarget := e.myProfile.Level + e.cfg.BattleLevelDiff
-
-		fmt.Printf("🔍 %d명의 유저 프로필 확인 중... (타겟: +%d ~ +%d)\n", len(usernames), minTarget, maxTarget)
-
-		for _, username := range usernames {
-			if e.checkStop() {
-				return
-			}
-
-			profile := e.CheckOtherProfile(username)
-			if profile == nil || profile.Level <= 0 {
+			if len(usernames) == 0 {
+				fmt.Println("⏳ 랭킹에서 유저를 찾을 수 없음, 30초 후 재시도...")
+				time.Sleep(30 * time.Second)
 				continue
 			}
 
-			if profile.Level >= minTarget && profile.Level <= maxTarget {
-				target = &RankingEntry{
-					Username: username,
-					Level:    profile.Level,
+			// 3. 모든 유저의 프로필 확인하여 적합한 타겟 목록 수집
+			minTarget := e.myProfile.Level + 1
+			maxTarget := e.myProfile.Level + e.cfg.BattleLevelDiff
+
+			fmt.Printf("🔍 %d명의 유저 프로필 확인 중... (타겟: +%d ~ +%d)\n", len(usernames), minTarget, maxTarget)
+
+			for _, username := range usernames {
+				if e.checkStop() {
+					return
 				}
-				fmt.Printf("   ✅ %s: +%d (적합!)\n", username, profile.Level)
-				break
-			} else {
-				fmt.Printf("   ❌ %s: +%d (범위 외)\n", username, profile.Level)
+
+				// 자기 자신은 스킵
+				if username == e.myProfile.Name {
+					continue
+				}
+
+				profile := e.CheckOtherProfile(username)
+				if profile == nil || profile.Level <= 0 {
+					fmt.Printf("   ⚠️ %s: 프로필 조회 실패 또는 0레벨\n", username)
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				if profile.Level >= minTarget && profile.Level <= maxTarget {
+					candidates = append(candidates, &RankingEntry{
+						Username: username,
+						Level:    profile.Level,
+					})
+					fmt.Printf("   ✅ %s: +%d (적합!)\n", username, profile.Level)
+				} else {
+					fmt.Printf("   ❌ %s: +%d (범위 외)\n", username, profile.Level)
+				}
+
+				time.Sleep(1 * time.Second) // 프로필 조회 간격
 			}
 
-			time.Sleep(1 * time.Second) // 프로필 조회 간격
+			if len(candidates) == 0 {
+				fmt.Println("⏳ 적합한 타겟 없음, 30초 후 재시도...")
+				time.Sleep(30 * time.Second)
+				continue
+			}
+
+			fmt.Printf("📋 적합한 타겟 %d명 발견\n", len(candidates))
 		}
 
-		if target == nil {
-			fmt.Println("⏳ 적합한 타겟 없음, 30초 후 재시도...")
-			time.Sleep(30 * time.Second)
-			continue
+		// 적합한 타겟 중 가장 레벨이 낮은 타겟 선택 (역배 확률 최대화)
+		// 같은 타겟을 계속 사용 (제거하지 않음)
+		var target *RankingEntry
+		target = candidates[0]
+		for _, c := range candidates[1:] {
+			if c.Level < target.Level {
+				target = c
+			}
 		}
 
 		// 4. 타겟과 배틀
-		levelDiff := target.Level - e.myProfile.Level
+		// 승률 계산
+		winRate := 0.0
+		if e.battleWins+e.battleLosses > 0 {
+			winRate = float64(e.battleWins) / float64(e.battleWins+e.battleLosses) * 100
+		}
+
 		fmt.Printf("⚔️ #%d: %s (+%d) vs 나 (+%d) [%s]\n",
 			e.cycleCount, target.Username, target.Level, e.myProfile.Level, e.myProfile.SwordName)
-		overlay.UpdateStatus("⚔️ 자동 배틀 #%d\n타겟: %s +%d\n내 레벨: +%d\n\n📋 판단: +%d차 역배 도전", e.cycleCount, target.Username, target.Level, e.myProfile.Level, levelDiff)
+		overlay.UpdateStatus("⚔️ 자동 배틀 #%d\n타겟: %s +%d\n내 레벨: +%d\n\n💰 수익: %sG\n📊 승률: %.1f%% (%d승 %d패)",
+			e.cycleCount, target.Username, target.Level, e.myProfile.Level,
+			FormatGold(e.totalGold), winRate, e.battleWins, e.battleLosses)
 
 		e.sendCommand("/배틀 " + target.Username)
 		time.Sleep(3 * time.Second)
 
-		// 4. 결과 확인
+		// 결과 확인
 		resultText := e.readChatText()
 
 		// 배틀 횟수 제한 확인 (하루 10회 제한)
 		if DetectBattleLimit(resultText) {
+			// 최종 승률 계산
+			finalWinRate := 0.0
+			if e.battleWins+e.battleLosses > 0 {
+				finalWinRate = float64(e.battleWins) / float64(e.battleWins+e.battleLosses) * 100
+			}
+
+			fmt.Println()
+			fmt.Println("════════════════════════════════════════")
 			fmt.Println("⏰ 오늘 배틀 횟수를 모두 사용했습니다 (10회/일)")
-			overlay.UpdateStatus("⚔️ 자동 배틀\n⏰ 일일 배틀 제한 도달\n전적: %d승 %d패\n총 수익: %sG", e.battleWins, e.battleLosses, FormatGold(e.totalGold))
+			fmt.Println("════════════════════════════════════════")
+			fmt.Printf("📊 최종 전적: %d승 %d패 (승률 %.1f%%)\n", e.battleWins, e.battleLosses, finalWinRate)
+			fmt.Printf("💰 총 수익: %sG\n", FormatGold(e.totalGold))
+			fmt.Println("════════════════════════════════════════")
+			fmt.Println()
+			fmt.Println("엔터를 누르면 메뉴로 돌아갑니다...")
+
+			overlay.UpdateStatus("⚔️ 자동 배틀 완료\n⏰ 일일 배틀 제한 도달\n\n📊 전적: %d승 %d패\n📈 승률: %.1f%%\n💰 총 수익: %sG",
+				e.battleWins, e.battleLosses, finalWinRate, FormatGold(e.totalGold))
+
+			// 사용자 입력 대기 후 메뉴 복귀
+			fmt.Scanln()
 			return
 		}
 
@@ -1103,12 +1165,22 @@ func (e *Engine) loopBattle() {
 			e.battleWins++
 			goldEarned = result.GoldEarned
 			e.totalGold += goldEarned
+
+			// 승률 업데이트
+			winRate = float64(e.battleWins) / float64(e.battleWins+e.battleLosses) * 100
+
 			fmt.Printf("   → 🏆 승리! +%dG (역배 성공!)\n", goldEarned)
-			overlay.UpdateStatus("⚔️ 자동 배틀\n🏆 승리! +%sG\n전적: %d승 %d패\n\n📋 판단: 역배 성공", FormatGold(goldEarned), e.battleWins, e.battleLosses)
+			overlay.UpdateStatus("⚔️ 자동 배틀\n🏆 승리! +%sG\n\n💰 수익: %sG\n📊 승률: %.1f%% (%d승 %d패)",
+				FormatGold(goldEarned), FormatGold(e.totalGold), winRate, e.battleWins, e.battleLosses)
 		} else {
 			e.battleLosses++
+
+			// 승률 업데이트
+			winRate = float64(e.battleWins) / float64(e.battleWins+e.battleLosses) * 100
+
 			fmt.Println("   → 💔 패배...")
-			overlay.UpdateStatus("⚔️ 자동 배틀\n💔 패배...\n전적: %d승 %d패\n\n📋 판단: 역배 실패", e.battleWins, e.battleLosses)
+			overlay.UpdateStatus("⚔️ 자동 배틀\n💔 패배...\n\n💰 수익: %sG\n📊 승률: %.1f%% (%d승 %d패)",
+				FormatGold(e.totalGold), winRate, e.battleWins, e.battleLosses)
 		}
 
 		// 5. v2 텔레메트리 기록 (공통 헬퍼 사용)
@@ -1118,10 +1190,7 @@ func (e *Engine) loopBattle() {
 		// 6. 현재 통계 출력 (공통 헬퍼 사용)
 		PrintBattleStats(e.battleWins, e.battleLosses, e.totalGold)
 
-		// 7. 프로필 갱신 (공통 헬퍼 사용)
-		if newProfile := e.CheckProfileFull(); newProfile != nil && newProfile.Level > 0 {
-			e.myProfile = newProfile
-		}
+		// 7. 프로필 갱신은 생략 (같은 타겟 계속 사용하므로 불필요)
 
 		// 8. 쿨다운
 		time.Sleep(time.Duration(e.cfg.BattleCooldown * float64(time.Second)))
@@ -1137,12 +1206,25 @@ func (e *Engine) ResetLastChatText() {
 	lastChatText = ""
 }
 
+// SaveLastChatText 현재 채팅 텍스트를 저장 (새 응답만 감지하기 위해)
+// 다른 유저 프로필 조회 등에서 명령어 전송 전에 호출
+// ResetLastChatText와 달리 현재 채팅을 저장하여 새 응답만 추출 가능
+func (e *Engine) SaveLastChatText() {
+	lastChatText = e.readChatTextRaw()
+}
+
 // readChatText 화면에서 텍스트 읽기 (클립보드 방식)
 // 내 메시지만 필터링하여 반환 (다른 사람 메시지 무시)
 func (e *Engine) readChatText() string {
 	text := e.readChatClipboard()
 	// 내 메시지만 필터링 (프로필이 있는 경우)
 	return e.filterMyMessages(text)
+}
+
+// readChatTextRaw 화면에서 텍스트 읽기 (필터 없음)
+// 랭킹, 다른 유저 프로필 등 다른 사람 정보가 필요할 때 사용
+func (e *Engine) readChatTextRaw() string {
+	return e.readChatClipboard()
 }
 
 // readChatClipboard 클립보드 복사 방식으로 채팅 텍스트 읽기
@@ -1265,8 +1347,19 @@ func chatLinesMatch(a, b []string) bool {
 
 // waitForResponse 플레이봇 응답 대기 (최대 maxWait 동안)
 // 명령어 전송 후 응답이 올 때까지 대기
-// 새로운 부분만 반환
+// 새로운 부분만 반환 (내 메시지 필터링됨)
 func (e *Engine) waitForResponse(maxWait time.Duration) string {
+	return e.waitForResponseInternal(maxWait, false)
+}
+
+// waitForResponseRaw 플레이봇 응답 대기 (필터 없음)
+// 랭킹, 다른 유저 프로필 등 다른 사람 정보가 필요할 때 사용
+func (e *Engine) waitForResponseRaw(maxWait time.Duration) string {
+	return e.waitForResponseInternal(maxWait, true)
+}
+
+// waitForResponseInternal 응답 대기 내부 구현
+func (e *Engine) waitForResponseInternal(maxWait time.Duration, raw bool) string {
 	startTime := time.Now()
 	pollInterval := 500 * time.Millisecond
 	initialWait := 1 * time.Second
@@ -1275,7 +1368,12 @@ func (e *Engine) waitForResponse(maxWait time.Duration) string {
 	time.Sleep(initialWait)
 
 	for time.Since(startTime) < maxWait {
-		text := e.readChatText()
+		var text string
+		if raw {
+			text = e.readChatTextRaw()
+		} else {
+			text = e.readChatText()
+		}
 		if text == "" {
 			time.Sleep(pollInterval)
 			continue
@@ -1753,6 +1851,18 @@ func (e *Engine) waitForResult(prevLevel int) {
 
 func (e *Engine) sendCommand(cmd string) {
 	input.SendCommand(e.cfg.ClickX, e.cfg.ClickY, cmd)
+}
+
+// sendCommandOnce 엔터 1번만 누르는 명령어 전송
+// 입력창 클리어 후 텍스트 입력, 엔터 1번 (줄바꿈만, 전송 안됨)
+func (e *Engine) sendCommandOnce(cmd string) {
+	input.SendCommandOnce(e.cfg.ClickX, e.cfg.ClickY, cmd)
+}
+
+// appendAndSend 기존 입력에 텍스트 추가 후 전송
+// 입력창을 클리어하지 않고 텍스트를 추가한 뒤 전송 (엔터 2번)
+func (e *Engine) appendAndSend(text string) {
+	input.AppendAndSend(e.cfg.ClickX, e.cfg.ClickY, text)
 }
 
 func (e *Engine) checkStop() bool {

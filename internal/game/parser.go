@@ -93,6 +93,8 @@ var (
 	farmItemPattern   = regexp.MustCompile(`『?([^『』\[\]]+?)』?\s*(?:획득|얻|드랍|뽑)`)
 	// 괄호 안 아이템: 『용검』, 『불꽃검』
 	bracketItemPattern = regexp.MustCompile(`『([^』]+)』`)
+	// 게임 출력 형식: "⚔️획득 검: [+N] 아이템이름" 또는 "[+N] 아이템이름"
+	acquiredSwordPattern = regexp.MustCompile(`(?:획득\s*검:|⚔️획득\s*검:)?\s*\[\+?(\d+)\]\s*(.+?)(?:\s*$|\n)`)
 
 	// 프로필 패턴 (● 접두사 허용, 숫자와 G 사이 공백 허용)
 	profileNamePattern   = regexp.MustCompile(`이름:\s*(@\S+)`)
@@ -111,7 +113,8 @@ var (
 	battleGoldPattern   = regexp.MustCompile(`전리품\s*(\d{1,3}(?:,\d{3})*)\s*G`)
 	battleVsPattern     = regexp.MustCompile(`(@\S+)\s*『\[([^\]]+)\]`)
 	// 배틀 횟수 제한 패턴 (하루 10회 제한 도달 시)
-	battleLimitPattern  = regexp.MustCompile(`(?:배틀\s*횟수\s*제한|오늘\s*배틀.*모두\s*사용)`)
+	// 〖🚫 배틀 횟수 제한〗 또는 "오늘은 이미 10번의 배틀"
+	battleLimitPattern = regexp.MustCompile(`(?:배틀\s*횟수\s*제한|오늘.*10번.*배틀|오늘\s*배틀.*모두\s*사용)`)
 )
 
 // ParseOCRText OCR 텍스트 파싱 (범위 검증 포함)
@@ -506,6 +509,66 @@ func ValidateGold(gold int) bool {
 	return gold >= MinGold && gold <= MaxGold
 }
 
+// ParseProfileForUser 특정 유저의 프로필만 파싱
+// 텍스트에서 해당 유저(● 이름: @유저명)의 프로필 섹션만 추출하여 파싱
+// username은 @포함 형태 (예: @박도영)
+func ParseProfileForUser(text string, username string) *Profile {
+	// 해당 유저의 프로필 섹션 추출
+	section := extractProfileSection(text, username)
+	if section == "" {
+		return nil
+	}
+	// 추출된 섹션만 파싱
+	return ParseProfile(section)
+}
+
+// extractProfileSection 특정 유저의 프로필 섹션 추출
+// ⚔️ [프로필] 다음에 ● 이름: @유저명 이 있는 섹션만 추출
+func extractProfileSection(text string, username string) string {
+	lines := strings.Split(text, "\n")
+	var section []string
+	foundProfileHeader := false
+	foundTargetUser := false
+
+	for _, line := range lines {
+		// 프로필 헤더 감지: ⚔️ [프로필]
+		if strings.Contains(line, "[프로필]") {
+			// 새 프로필 시작 - 이전 섹션 리셋
+			if foundTargetUser {
+				// 이미 타겟 유저 찾았으면 여기서 종료
+				break
+			}
+			section = []string{line}
+			foundProfileHeader = true
+			continue
+		}
+
+		// 프로필 헤더 다음에 유저 이름 확인
+		if foundProfileHeader && strings.Contains(line, "이름:") {
+			if strings.Contains(line, username) {
+				// 타겟 유저 프로필 발견!
+				foundTargetUser = true
+			} else {
+				// 다른 유저 프로필 - 스킵
+				foundProfileHeader = false
+				section = nil
+			}
+		}
+
+		// 타겟 유저 프로필 섹션 수집
+		if foundTargetUser {
+			section = append(section, line)
+		} else if foundProfileHeader {
+			section = append(section, line)
+		}
+	}
+
+	if !foundTargetUser || len(section) == 0 {
+		return ""
+	}
+	return strings.Join(section, "\n")
+}
+
 // ParseProfile 프로필 파싱
 // /프로필 명령어 결과에서 프로필 정보 추출
 func ParseProfile(text string) *Profile {
@@ -747,12 +810,20 @@ func ExtractSwordInfo(text string) (int, string) {
 // 예: "방망이를 얻었습니다" -> "방망이"
 // 예: "특수 아이템 『용검』 발견!" -> "용검"
 func ExtractItemName(text string) string {
-	// 1순위: 특수 아이템 패턴
+	// 1순위: 특수 아이템 패턴 (히든/특수 키워드 포함)
 	if matches := specialNamePattern.FindStringSubmatch(text); len(matches) > 1 {
 		return strings.TrimSpace(matches[1])
 	}
 
-	// 2순위: 『』 괄호 안의 아이템
+	// 2순위: 게임 출력 형식 "⚔️획득 검: [+N] 아이템이름" 또는 "[+N] 아이템이름"
+	if matches := acquiredSwordPattern.FindStringSubmatch(text); len(matches) > 2 {
+		name := strings.TrimSpace(matches[2])
+		if name != "" && len(name) < 30 {
+			return name
+		}
+	}
+
+	// 3순위: 『』 괄호 안의 아이템
 	if matches := bracketItemPattern.FindStringSubmatch(text); len(matches) > 1 {
 		innerText := matches[1]
 		// [+N] 패턴이 있으면 제거
@@ -763,7 +834,7 @@ func ExtractItemName(text string) string {
 		}
 	}
 
-	// 3순위: "XXX 획득/얻/드랍" 패턴
+	// 4순위: "XXX 획득/얻/드랍" 패턴
 	if matches := farmItemPattern.FindStringSubmatch(text); len(matches) > 1 {
 		name := strings.TrimSpace(matches[1])
 		// 불필요한 접미사 제거

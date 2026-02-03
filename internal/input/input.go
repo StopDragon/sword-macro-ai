@@ -95,6 +95,42 @@ func SendCommand(x, y int, command string) {
 	time.Sleep(100 * time.Millisecond)
 }
 
+// SendCommandOnce 게임 명령어 전송 (엔터 1번만)
+// 입력창 클리어 후 텍스트 입력, 엔터 1번 (줄바꿈만, 전송 안됨)
+func SendCommandOnce(x, y int, command string) {
+	// 1. 입력창 클릭
+	Click(x, y)
+	time.Sleep(50 * time.Millisecond)
+
+	// 2. 입력창 청소 (Cmd+A → Delete)
+	ClearInput()
+	time.Sleep(50 * time.Millisecond)
+
+	// 3. 텍스트 입력 (클립보드 + Cmd+V)
+	TypeText(command)
+	time.Sleep(300 * time.Millisecond)
+
+	// 4. 엔터 1번만 (줄바꿈)
+	PressEnter()
+	time.Sleep(100 * time.Millisecond)
+}
+
+// AppendAndSend 기존 입력에 텍스트 추가 후 전송 (엔터 2번)
+// 입력창을 클리어하지 않고 텍스트를 추가한 뒤 전송
+// 주의: 클릭하면 커서가 맨 앞으로 가므로 클릭하지 않음
+// 카카오톡: /프로(엔터1번) + @유저명(엔터2번) = 메시지 전송
+func AppendAndSend(x, y int, text string) {
+	// 클릭 없이 바로 텍스트 추가 (이전 단계에서 커서가 이미 끝에 있음)
+	TypeText(text)
+	time.Sleep(300 * time.Millisecond)
+
+	// 엔터 2번 (전송)
+	PressEnter()
+	time.Sleep(300 * time.Millisecond)
+	PressEnter()
+	time.Sleep(100 * time.Millisecond)
+}
+
 // CheckFailsafe 비상 정지 체크 (화면 좌상단)
 func CheckFailsafe() bool {
 	x, y := GetMousePos()
