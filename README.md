@@ -239,6 +239,32 @@ print(f"G/h: {total_gold / total_hours:,.0f}")
 
 ---
 
+## 다운로드 (빌드된 앱)
+
+**[GitHub Releases](../../releases)** 에서 빌드된 앱을 다운로드할 수 있습니다.
+
+| 플랫폼 | 파일 | 비고 |
+|--------|------|------|
+| macOS | `SwordMacro-macOS.dmg` | 시스템 설정 > 접근성 권한 필요 |
+| Windows | `SwordMacro-Windows.zip` | 첫 실행 시 OCR 모델 다운로드 (~200MB) |
+
+### 직접 빌드하기
+
+```bash
+# 가상환경 생성 및 의존성 설치
+python3 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install pyinstaller -r requirements.txt
+
+# 빌드 실행
+python build.py
+
+# macOS: DMG까지 생성 (create-dmg 필요)
+python build.py --dmg
+```
+
+---
+
 ## 주의사항
 
 - 매크로 실행 중 카카오톡 창을 이동하거나 가리지 마세요
@@ -279,12 +305,25 @@ Unlike simple command-repeating macros, sword-macro-ai uses:
 - `pip install -r requirements.txt`
 - macOS: Grant Accessibility permission to your terminal app
 
-### Quick Start
+### Download
+Pre-built binaries are available on the [Releases](../../releases) page:
+- **macOS**: `SwordMacro-macOS.dmg` (requires Accessibility permission)
+- **Windows**: `SwordMacro-Windows.zip` (downloads OCR model on first run)
+
+### Quick Start (from source)
 ```bash
-git clone https://github.com/YOUR_USERNAME/sword-macro-ai.git
+git clone https://github.com/StopDragon/sword-macro-ai.git
 cd sword-macro-ai
 pip install -r requirements.txt
 python sword_macro.py
+```
+
+### Build from Source
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install pyinstaller -r requirements.txt
+python build.py        # Build for current platform
+python build.py --dmg  # macOS: also create DMG
 ```
 
 ---
