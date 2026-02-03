@@ -1,6 +1,8 @@
-# Claude Code / OMC
+# IDE / Editor
 .claude/
 .omc/
+.vscode/
+.idea/
 
 # Python
 __pycache__/
