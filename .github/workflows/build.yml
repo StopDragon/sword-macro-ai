@@ -1,0 +1,113 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # 수동 실행 허용
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build macOS app
+        run: |
+          pyinstaller sword_macro_mac.spec
+
+      - name: Create DMG
+        run: |
+          brew install create-dmg
+          create-dmg \
+            --volname "SwordMacro" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "SwordMacro.app" 175 190 \
+            --app-drop-link 425 190 \
+            --hide-extension "SwordMacro.app" \
+            "SwordMacro-macOS.dmg" \
+            "dist/SwordMacro.app" || true
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SwordMacro-macOS
+          path: |
+            dist/SwordMacro.app
+            SwordMacro-macOS.dmg
+          if-no-files-found: warn
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build Windows exe
+        run: |
+          pyinstaller sword_macro_win.spec
+
+      - name: Create ZIP archive
+        run: |
+          Compress-Archive -Path dist/SwordMacro -DestinationPath SwordMacro-Windows.zip
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SwordMacro-Windows
+          path: |
+            dist/SwordMacro
+            SwordMacro-Windows.zip
+          if-no-files-found: warn
+
+  release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure
+        run: ls -R artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/SwordMacro-macOS/SwordMacro-macOS.dmg
+            artifacts/SwordMacro-Windows/SwordMacro-Windows.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

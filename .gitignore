@@ -12,3 +12,16 @@ sword_config.json
 sword_macro.log
 sword_macro.log.bak
 sword_data.csv
+
+# PyInstaller 빌드
+build/
+dist/
+*.spec.bak
+
+# macOS
+*.app
+*.dmg
+.DS_Store
+
+# Windows
+*.exe
