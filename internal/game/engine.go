@@ -1212,7 +1212,7 @@ func (e *Engine) loopBattle() {
 			FormatGold(e.totalGold), winRate, e.battleWins, e.battleLosses)
 
 		e.SaveLastChatText()
-		e.sendCommand("/배틀 " + target.Username)
+		e.sendCommand("/배틀" + target.Username)
 		// 배틀 결과는 상대 이름 포함 → filterMyMessages가 패배 결과를 제거할 수 있으므로 Raw 사용
 		resultText := e.waitForResponseRaw(5 * time.Second)
 
