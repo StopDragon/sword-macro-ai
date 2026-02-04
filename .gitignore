@@ -1,0 +1,28 @@
+# IDE / Editor
+.claude/
+.omc/
+.vscode/
+.idea/
+
+# Go
+*.test
+*.out
+
+# 런타임 생성 파일
+sword_config.json
+sword_macro.log
+sword_macro.log.bak
+
+# 빌드
+build/
+
+# macOS
+.DS_Store
+
+# Windows
+*.exe
+
+# Build binaries
+/sword-api
+/sword-macro
+.telemetry_state.json

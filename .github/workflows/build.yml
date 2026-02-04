@@ -1,0 +1,132 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 같은 브랜치/PR에서 새 커밋이 오면 이전 실행 취소
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          else
+            echo "VERSION=dev" >> $GITHUB_ENV
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+
+      - name: Build macOS ARM64
+        env:
+          CGO_ENABLED: 1
+          GOOS: darwin
+          GOARCH: arm64
+        run: |
+          go build -ldflags="-s -w" -o build/SwordMacro-darwin-arm64 ./cmd/sword-macro
+
+      - name: Build macOS AMD64
+        env:
+          CGO_ENABLED: 1
+          GOOS: darwin
+          GOARCH: amd64
+        run: |
+          go build -ldflags="-s -w" -o build/SwordMacro-darwin-amd64 ./cmd/sword-macro
+
+      - name: Create Universal Binary
+        run: |
+          lipo -create -output build/SwordMacro-macOS \
+            build/SwordMacro-darwin-arm64 \
+            build/SwordMacro-darwin-amd64
+
+      - name: Create ZIP
+        run: |
+          cd build && zip "SwordMacro-mac-${VERSION}.zip" SwordMacro-macOS
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SwordMacro-mac-${{ env.VERSION }}
+          path: build/SwordMacro-mac-${{ env.VERSION }}.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          else
+            echo "VERSION=dev" >> $GITHUB_ENV
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+
+      - name: Build Windows AMD64
+        env:
+          CGO_ENABLED: 1
+        run: |
+          go build -ldflags="-s -w" -o build/SwordMacro.exe ./cmd/sword-macro
+
+      - name: Create ZIP
+        run: |
+          Compress-Archive -Path build/SwordMacro.exe -DestinationPath "SwordMacro-win-${{ env.VERSION }}.zip"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SwordMacro-win-${{ env.VERSION }}
+          path: SwordMacro-win-${{ env.VERSION }}.zip
+
+  release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure
+        run: ls -R artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/SwordMacro-mac-${{ env.VERSION }}/SwordMacro-mac-${{ env.VERSION }}.zip
+            artifacts/SwordMacro-win-${{ env.VERSION }}/SwordMacro-win-${{ env.VERSION }}.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
