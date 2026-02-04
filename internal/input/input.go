@@ -54,22 +54,22 @@ func GetClipboard() string {
 func ReadChatText(chatX, chatY, inputX, inputY int) string {
 	// 1. 채팅 영역 클릭 (텍스트 선택 가능하도록)
 	Click(chatX, chatY)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// 2. 전체 선택 (Cmd+A / Ctrl+A)
 	SelectAll()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// 3. 복사 (Cmd+C / Ctrl+C)
 	CopySelection()
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	// 4. 클립보드에서 텍스트 가져오기
 	text := GetClipboard()
 
 	// 5. 입력창으로 복귀 (선택 해제)
 	Click(inputX, inputY)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
 
 	return text
 }
@@ -78,21 +78,21 @@ func ReadChatText(chatX, chatY, inputX, inputY int) string {
 func SendCommand(x, y int, command string) {
 	// 1. 입력창 클릭
 	Click(x, y)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
 
 	// 2. 입력창 청소 (Cmd+A → Delete)
 	ClearInput()
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
 
 	// 3. 텍스트 입력 (클립보드 + Cmd+V)
 	TypeText(command)
-	time.Sleep(300 * time.Millisecond) // 붙여넣기 후 0.3초
-
-	// 4. 엔터 2번 (0.3초 간격)
-	PressEnter()
-	time.Sleep(300 * time.Millisecond)
-	PressEnter()
 	time.Sleep(100 * time.Millisecond)
+
+	// 4. 엔터 2번 (줄바꿈 + 전송)
+	PressEnter()
+	time.Sleep(150 * time.Millisecond)
+	PressEnter()
+	time.Sleep(50 * time.Millisecond)
 }
 
 // SendCommandOnce 게임 명령어 전송 (엔터 1번만)
@@ -100,19 +100,19 @@ func SendCommand(x, y int, command string) {
 func SendCommandOnce(x, y int, command string) {
 	// 1. 입력창 클릭
 	Click(x, y)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
 
 	// 2. 입력창 청소 (Cmd+A → Delete)
 	ClearInput()
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
 
 	// 3. 텍스트 입력 (클립보드 + Cmd+V)
 	TypeText(command)
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	// 4. 엔터 1번만 (줄바꿈)
 	PressEnter()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 }
 
 // AppendAndSend 기존 입력에 텍스트 추가 후 전송 (엔터 2번)
@@ -122,13 +122,13 @@ func SendCommandOnce(x, y int, command string) {
 func AppendAndSend(x, y int, text string) {
 	// 클릭 없이 바로 텍스트 추가 (이전 단계에서 커서가 이미 끝에 있음)
 	TypeText(text)
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	// 엔터 2번 (전송)
 	PressEnter()
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 	PressEnter()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 }
 
 // CheckFailsafe 비상 정지 체크 (화면 좌상단)

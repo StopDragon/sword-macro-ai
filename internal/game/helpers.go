@@ -111,9 +111,16 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 		delay := e.getDelayForLevel(currentLevel)
 		time.Sleep(delay)
 
-		// 결과 확인
+		// 결과 확인 - 게임 응답이 올 때까지 대기
+		// 내 명령만 보이고 게임 응답(성공/유지/파괴)이 없으면 재읽기
 		text := e.readChatTextWaitForChange(5 * time.Second)
 		state := ParseOCRText(text)
+
+		for retry := 0; retry < 3 && state.LastResult == "" && e.running; retry++ {
+			time.Sleep(1 * time.Second)
+			text = e.readChatTextWaitForChange(3 * time.Second)
+			state = ParseOCRText(text)
+		}
 
 		if state == nil {
 			continue
@@ -154,13 +161,21 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 				fmt.Printf("  ⚔️ 강화 성공! +%d 도달 (계산값)\n", currentLevel)
 			}
 		} else if state.LastResult == "hold" {
-			// 유지 = 레벨 변화 없음
+			// 유지 시에도 ResultLevel 확인 (현재 레벨 동기화)
+			// 채팅에 성공(+9→+10)과 유지(+10)가 동시에 잡힐 때
+			// LastResult="hold"가 되지만 ResultLevel은 정확히 10을 가리킴
+			if state.ResultLevel > 0 && state.ResultLevel != currentLevel {
+				currentLevel = state.ResultLevel
+			}
 			fmt.Printf("  💫 강화 유지 (현재 +%d)\n", currentLevel)
 		} else if state.LastResult == "destroy" {
 			// 파괴는 위에서 처리됨, 여기 오면 안됨
 			fmt.Printf("  [경고] destroy가 fallback에서 감지됨\n")
 		} else {
-			// 결과 불명확 - 레벨 변경 없이 재시도
+			// 결과 불명확 - ResultLevel이라도 확인하여 레벨 동기화
+			if state.ResultLevel > 0 && state.ResultLevel != currentLevel {
+				currentLevel = state.ResultLevel
+			}
 			fmt.Printf("  ❓ 결과 불명확 (LastResult='%s') - 재시도\n", state.LastResult)
 		}
 

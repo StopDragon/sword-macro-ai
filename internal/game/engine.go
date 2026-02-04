@@ -612,15 +612,40 @@ func (e *Engine) loopEnhance() {
 		delay := e.getDelayForLevel(currentLevel)
 		time.Sleep(delay)
 
-		// 결과 확인 및 골드 부족 체크
-		text := e.readChatText()
+		// 결과 확인 - 게임 응답이 올 때까지 대기
+		text := e.readChatTextWaitForChange(5 * time.Second)
+
+		// 응답이 없으면 재시도 (게임 응답 전에 읽은 경우)
+		if text == "" {
+			for retry := 0; retry < 3 && e.running; retry++ {
+				time.Sleep(1 * time.Second)
+				text = e.readChatTextWaitForChange(3 * time.Second)
+				if text != "" {
+					break
+				}
+			}
+		}
+
 		if text != "" {
+			// 골드 부족 체크
 			goldInfo := DetectInsufficientGold(text)
 			if goldInfo.IsInsufficient {
 				overlay.UpdateStatus("⚔️ 강화 중단\n💰 골드 부족!\n필요: %s\n보유: %s",
 					FormatGold(goldInfo.RequiredGold), FormatGold(goldInfo.RemainingGold))
 				e.handleInsufficientGold(goldInfo)
 				return
+			}
+
+			// 강화 결과에서 레벨 확인하여 목표 달성 시 즉시 종료
+			if resultState := ParseOCRText(text); resultState != nil {
+				resultLevel := e.ExtractCurrentLevel(resultState)
+				if e.IsTargetReached(resultLevel) {
+					fmt.Printf("\n🎉 목표 달성! +%d\n", resultLevel)
+					logger.Info("목표 달성: +%d", resultLevel)
+					overlay.UpdateStatus("⚔️ 강화 완료!\n🎉 +%d 달성!\n\n📋 판단: 목표 도달 → 완료", resultLevel)
+					e.ReportSwordComplete()
+					return
+				}
 			}
 		}
 	}
@@ -1419,9 +1444,11 @@ func (e *Engine) waitForResponseInternal(maxWait time.Duration, raw bool) string
 	return ""
 }
 
-// filterMyMessages 내 메시지만 필터링 (가장 최근 @이름 섹션만)
-// 다른 유저의 강화 결과가 섞이는 것을 방지
-// 예: "플레이봇 @권혁진 〖💦강화 유지💦〗" + "[+12] 검이름" 이 내 결과에 혼입되는 문제 차단
+// filterMyMessages 내 메시지만 필터링 (다른 유저 영역 제거 방식)
+// 기존 "마지막 섹션 선택" 방식의 문제:
+//   같은 채팅창에 성공(+9→+10)과 유지(+10)가 동시에 잡힐 때
+//   마지막 @myName(유지)만 반환 → 성공 결과 유실 → 목표 도달 감지 실패
+// 개선: 다른 유저의 영역만 제거하고, 내 메시지는 모두 보존
 func (e *Engine) filterMyMessages(text string) string {
 	if e.sessionProfile == nil || e.sessionProfile.Name == "" {
 		return text // 프로필 없으면 전체 반환
@@ -1430,33 +1457,33 @@ func (e *Engine) filterMyMessages(text string) string {
 	myName := e.sessionProfile.Name // "@행복사랑평화" 형식
 	lines := strings.Split(text, "\n")
 
-	// 가장 마지막 내 메시지 섹션의 시작점 찾기
-	// "플레이봇 @내이름" 패턴 (게임봇이 나에게 보낸 결과)
-	lastMyIndex := -1
-	for i, line := range lines {
-		if strings.Contains(line, myName) {
-			lastMyIndex = i // 마지막 내 섹션 시작점 갱신
-		}
-	}
-
-	// 내 섹션이 없으면 전체 반환
-	if lastMyIndex == -1 {
-		return text
-	}
-
-	// 마지막 내 섹션부터 끝까지 또는 다른 사람 섹션 시작 전까지
+	// 다른 유저 영역 제거, 내 영역은 모두 보존
+	// 상태 머신: @가 포함된 줄에서 유저 전환 감지
+	// - @myName 포함 → 내 영역 (포함)
+	// - @있지만 myName 없음 → 다른 유저 영역 (제거)
+	// - @없음 → 현재 상태 유지 (이전 영역에 속하는 상세 메시지)
 	var result []string
-	for i := lastMyIndex; i < len(lines); i++ {
-		line := lines[i]
+	inOtherSection := false
 
-		// 다른 유저의 게임 메시지가 시작되면 중단
-		// @가 포함되어 있지만 내 이름(@myName)이 없는 줄 = 다른 유저의 영역
-		// 예: "12:21 플레이봇 @권혁진 〖결과〗" 또는 "12:21 권혁진 @플레이봇 강화"
-		if i > lastMyIndex && strings.Contains(line, "@") && !strings.Contains(line, myName) {
-			break
+	for _, line := range lines {
+		hasAt := strings.Contains(line, "@")
+		hasMy := strings.Contains(line, myName)
+
+		if hasAt {
+			if hasMy {
+				// 내 영역으로 전환 (결과, 속보 등)
+				inOtherSection = false
+			} else {
+				// 다른 유저 영역으로 전환
+				// 예: "플레이봇 @권혁진 〖결과〗", "한지원 @플레이봇 강화"
+				inOtherSection = true
+				continue // 이 줄도 제거
+			}
 		}
 
-		result = append(result, line)
+		if !inOtherSection {
+			result = append(result, line)
+		}
 	}
 
 	if len(result) == 0 {
@@ -1544,8 +1571,8 @@ func (e *Engine) farmForGoldMine() (string, string, int, bool) {
 				e.sendCommand("/강화")
 				time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 
-				// 강화 결과 읽기
-				enhanceText := e.readChatText()
+				// 강화 결과 읽기 (응답 대기)
+				enhanceText := e.readChatTextWaitForChange(5 * time.Second)
 				enhanceState := ParseOCRText(enhanceText)
 
 				if enhanceState != nil {

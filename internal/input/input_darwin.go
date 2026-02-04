@@ -58,9 +58,9 @@ void pressKey(int keyCode, int flags) {
     }
 
     CGEventPost(kCGHIDEventTap, down);
-    usleep(50000); // 50ms 대기 (키 다운 후)
+    usleep(30000); // 30ms 대기 (키 다운 후)
     CGEventPost(kCGHIDEventTap, up);
-    usleep(50000); // 50ms 대기 (키 업 후)
+    usleep(30000); // 30ms 대기 (키 업 후)
 
     CFRelease(down);
     CFRelease(up);
@@ -135,7 +135,7 @@ func typeText(text string) {
 
 	// 클립보드에 복사
 	C.setClipboard(cText)
-	time.Sleep(300 * time.Millisecond) // 클립보드 안전 대기 (파이썬: 0.3초)
+	time.Sleep(100 * time.Millisecond) // 클립보드 안전 대기
 
 	// Cmd+V (붙여넣기)
 	C.pressKey(C.int(keyCodeV), C.int(flagCommand))
