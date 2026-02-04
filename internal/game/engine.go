@@ -415,6 +415,18 @@ func (e *Engine) setupAndRun() {
 		e.lastRawChatText = initialText
 	}
 
+	// 텔레메트리에 모드 설정 (v3)
+	switch e.mode {
+	case ModeEnhance:
+		e.telem.SetMode("enhance")
+	case ModeSpecial:
+		e.telem.SetMode("special")
+	case ModeGoldMine:
+		e.telem.SetMode("goldmine")
+	case ModeBattle:
+		e.telem.SetMode("battle")
+	}
+
 	// 모드별 실행
 	switch e.mode {
 	case ModeEnhance:
@@ -801,9 +813,10 @@ func (e *Engine) loopSpecial() {
 			fmt.Printf("\n🎉 특수 아이템 발견! [%s]\n", itemName)
 			logger.Info("특수 아이템 발견: %s", itemName)
 
-			// 텔레메트리: 아이템 이름 포함
+			// 텔레메트리: 특수 아이템 발견 즉시 전송
 			e.telem.RecordFarmingWithItem(itemName, "special")
 			e.telem.RecordSword()
+			e.telem.TrySend()
 			e.sessionStats.specialCount++
 
 			// 강화 목표가 있으면 강화 진행
@@ -1075,7 +1088,7 @@ func (e *Engine) loopGoldMine() {
 		e.totalGold += netProfit // 순수익으로 누적
 
 		// v3 텔레메트리 기록 (공통 헬퍼 사용) - 서버에는 판매 수익 보고
-		e.ReportGoldMineCycle(itemName, finalLevel, saleGold, currentGold)
+		e.ReportGoldMineCycle(itemName, finalLevel, saleGold, currentGold, enhanceCost, cycleTime.Seconds())
 
 		// 세션 통계 업데이트 - 순수익 기준
 		e.sessionStats.cycleTimeSum += cycleTime.Seconds()
@@ -1262,32 +1275,42 @@ func (e *Engine) loopBattle() {
 
 		result := ParseBattleResult(resultText, e.myProfile.Name)
 
-		goldEarned := 0
+		goldChange := 0
 		if result.Won {
 			e.battleWins++
-			goldEarned = result.GoldEarned
-			e.totalGold += goldEarned
+			goldChange = result.GoldEarned
+			e.totalGold += goldChange
 
 			// 승률 업데이트
 			winRate = float64(e.battleWins) / float64(e.battleWins+e.battleLosses) * 100
 
-			fmt.Printf("   → 🏆 승리! +%sG (역배 성공!)\n", FormatGold(goldEarned))
+			fmt.Printf("   → 🏆 승리! +%sG (역배 성공!)\n", FormatGold(goldChange))
 			overlay.UpdateStatus("⚔️ 자동 배틀\n🏆 승리! +%sG\n\n💰 수익: %sG\n📊 승률: %.1f%% (%d승 %d패)",
-				FormatGold(goldEarned), FormatGold(e.totalGold), winRate, e.battleWins, e.battleLosses)
+				FormatGold(goldChange), FormatGold(e.totalGold), winRate, e.battleWins, e.battleLosses)
 		} else {
 			e.battleLosses++
 
+			// 패배 시 골드 손실: 배틀 결과에 표시된 골드(승자 획득량)를 손실로 간주
+			if result.GoldEarned > 0 {
+				goldChange = -result.GoldEarned
+				e.totalGold -= result.GoldEarned
+			}
+
 			// 승률 업데이트
 			winRate = float64(e.battleWins) / float64(e.battleWins+e.battleLosses) * 100
 
-			fmt.Println("   → 💔 패배...")
+			if result.GoldEarned > 0 {
+				fmt.Printf("   → 💔 패배... -%sG\n", FormatGold(result.GoldEarned))
+			} else {
+				fmt.Println("   → 💔 패배...")
+			}
 			overlay.UpdateStatus("⚔️ 자동 배틀\n💔 패배...\n\n💰 수익: %sG\n📊 승률: %.1f%% (%d승 %d패)",
 				FormatGold(e.totalGold), winRate, e.battleWins, e.battleLosses)
 		}
 
-		// 5. v2 텔레메트리 기록 (공통 헬퍼 사용)
+		// 5. v3 텔레메트리 기록 (공통 헬퍼 사용) - goldChange는 승리 시 양수, 패배 시 음수
 		currentGold := e.readCurrentGold()
-		e.ReportBattleCycle(e.myProfile.SwordName, e.myProfile.Level, target.Level, result.Won, goldEarned, currentGold)
+		e.ReportBattleCycle(e.myProfile.SwordName, e.myProfile.Level, target.Level, result.Won, goldChange, currentGold)
 
 		// 6. 현재 통계 출력 (공통 헬퍼 사용)
 		PrintBattleStats(e.battleWins, e.battleLosses, e.totalGold)

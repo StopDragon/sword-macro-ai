@@ -20,9 +20,8 @@ import (
 const (
 	endpoint         = "https://sword-ai.stopdragon.kr/api/telemetry"
 	stateFile        = ".telemetry_state.json"
-	schemaVer        = 2 // v2: 검 종류별 통계, 특수 이름별 통계, 세션 통계 추가
-	sendTimeout      = 5 * time.Second
-	sendInterval     = 3 * time.Minute
+	schemaVer        = 3 // v3: 레벨별 강화 상세, 모드, 강화비용, 사이클시간, 배틀손실 추가
+	sendTimeout = 5 * time.Second
 	defaultAppSecret = "sw0rd-m4cr0-2026-s3cr3t-k3y" // 환경변수 없을 때 기본값
 	appSecretEnvVar  = "SWORD_APP_SECRET"
 )
@@ -78,6 +77,14 @@ type ItemFarmingStat struct {
 	SpecialCount int `json:"special_count"` // 특수로 획득한 횟수
 	NormalCount  int `json:"normal_count"`  // 일반으로 획득한 횟수
 	TrashCount   int `json:"trash_count"`   // 쓰레기로 획득한 횟수
+}
+
+// EnhanceLevelStat 레벨별 강화 상세 통계 (v3)
+type EnhanceLevelStat struct {
+	Attempts int `json:"attempts"` // 해당 레벨에서 강화 시도 횟수
+	Success  int `json:"success"`  // 성공
+	Fail     int `json:"fail"`     // 실패 (유지)
+	Destroy  int `json:"destroy"`  // 파괴
 }
 
 // Stats 수집 통계
@@ -137,6 +144,20 @@ type Stats struct {
 
 	// 세션 통계
 	Session *SessionStats `json:"session,omitempty"`
+
+	// === v3 새로 추가 ===
+
+	// 레벨별 강화 상세 통계: level -> EnhanceLevelStat
+	EnhanceLevelDetail map[int]*EnhanceLevelStat `json:"enhance_level_detail,omitempty"`
+
+	// 강화 총 비용 (골드)
+	EnhanceCostTotal int `json:"enhance_cost_total"`
+
+	// 사이클 총 소요 시간 (초)
+	CycleTimeTotal float64 `json:"cycle_time_total"`
+
+	// 배틀 패배 시 잃은 골드
+	BattleGoldLost int `json:"battle_gold_lost"`
 }
 
 // Payload 서버 전송 데이터
@@ -146,6 +167,7 @@ type Payload struct {
 	OSType        string `json:"os_type"`
 	SessionID     string `json:"session_id"`
 	Period        string `json:"period"`
+	Mode          string `json:"mode,omitempty"` // v3: 현재 모드 (enhance/special/goldmine/battle)
 	Stats         Stats  `json:"stats"`
 }
 
@@ -164,6 +186,7 @@ type Telemetry struct {
 	enabled      bool
 	sessionID    string
 	appVersion   string
+	mode         string // 현재 모드 (enhance/special/goldmine/battle)
 	stats        Stats
 	sessionStart time.Time
 	lastSentTime time.Time
@@ -194,6 +217,13 @@ func (t *Telemetry) IsEnabled() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.enabled
+}
+
+// SetMode 현재 모드 설정
+func (t *Telemetry) SetMode(mode string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.mode = mode
 }
 
 // RecordCycle 사이클 기록
@@ -232,29 +262,6 @@ func (t *Telemetry) RecordSword() {
 }
 
 // RecordEnhance 강화 결과 기록
-func (t *Telemetry) RecordEnhance(level int, result string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if !t.enabled {
-		return
-	}
-
-	t.stats.EnhanceAttempts++
-
-	switch result {
-	case "success":
-		t.stats.EnhanceSuccess++
-		if t.stats.EnhanceByLevel == nil {
-			t.stats.EnhanceByLevel = make(map[int]int)
-		}
-		t.stats.EnhanceByLevel[level]++
-	case "fail":
-		t.stats.EnhanceFail++
-	case "destroy":
-		t.stats.EnhanceDestroy++
-	}
-}
-
 // RecordEnhanceWithSword 검 종류 포함 강화 기록
 func (t *Telemetry) RecordEnhanceWithSword(swordName string, level int, result string) {
 	t.mu.Lock()
@@ -299,31 +306,23 @@ func (t *Telemetry) RecordEnhanceWithSword(swordName string, level int, result s
 			stat.Destroy++
 		}
 	}
-}
 
-// RecordBattle 배틀 결과 기록
-func (t *Telemetry) RecordBattle(myLevel, oppLevel int, won bool, goldEarned int) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if !t.enabled {
-		return
+	// 레벨별 강화 상세 통계 (v3)
+	if t.stats.EnhanceLevelDetail == nil {
+		t.stats.EnhanceLevelDetail = make(map[int]*EnhanceLevelStat)
 	}
-
-	t.stats.BattleCount++
-	isUpset := oppLevel > myLevel
-
-	if isUpset {
-		t.stats.UpsetAttempts++
+	if t.stats.EnhanceLevelDetail[level] == nil {
+		t.stats.EnhanceLevelDetail[level] = &EnhanceLevelStat{}
 	}
-
-	if won {
-		t.stats.BattleWins++
-		t.stats.BattleGoldEarned += goldEarned
-		if isUpset {
-			t.stats.UpsetWins++
-		}
-	} else {
-		t.stats.BattleLosses++
+	lvlStat := t.stats.EnhanceLevelDetail[level]
+	lvlStat.Attempts++
+	switch result {
+	case "success":
+		lvlStat.Success++
+	case "fail", "hold":
+		lvlStat.Fail++
+	case "destroy":
+		lvlStat.Destroy++
 	}
 }
 
@@ -361,7 +360,8 @@ func (t *Telemetry) RecordFarming(isSpecial bool) {
 // === v2 새로운 Record 함수들 ===
 
 // RecordBattleWithSword 검 종류 포함 배틀 기록
-func (t *Telemetry) RecordBattleWithSword(swordName string, myLevel, oppLevel int, won bool, goldEarned int) {
+// goldChange: 승리 시 양수(보상), 패배 시 음수(손실) 또는 0
+func (t *Telemetry) RecordBattleWithSword(swordName string, myLevel, oppLevel int, won bool, goldChange int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.enabled {
@@ -379,12 +379,15 @@ func (t *Telemetry) RecordBattleWithSword(swordName string, myLevel, oppLevel in
 
 	if won {
 		t.stats.BattleWins++
-		t.stats.BattleGoldEarned += goldEarned
+		t.stats.BattleGoldEarned += goldChange
 		if isUpset {
 			t.stats.UpsetWins++
 		}
 	} else {
 		t.stats.BattleLosses++
+		if goldChange < 0 {
+			t.stats.BattleGoldLost += -goldChange // 양수로 저장
+		}
 	}
 
 	// 검 종류별 배틀 통계 (v2)
@@ -418,11 +421,31 @@ func (t *Telemetry) RecordBattleWithSword(swordName string, myLevel, oppLevel in
 		}
 		stat := t.stats.UpsetStatsByDiff[levelDiff]
 		stat.Attempts++
-		if won {
+		if won && goldChange > 0 {
 			stat.Wins++
-			stat.GoldEarned += goldEarned
+			stat.GoldEarned += goldChange
 		}
 	}
+}
+
+// RecordEnhanceCost 강화 비용 기록
+func (t *Telemetry) RecordEnhanceCost(cost int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled || cost <= 0 {
+		return
+	}
+	t.stats.EnhanceCostTotal += cost
+}
+
+// RecordCycleTime 사이클 소요 시간 기록 (초)
+func (t *Telemetry) RecordCycleTime(seconds float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled || seconds <= 0 {
+		return
+	}
+	t.stats.CycleTimeTotal += seconds
 }
 
 // RecordSpecialWithName 특수 아이템 이름 포함 기록
@@ -592,15 +615,10 @@ func (t *Telemetry) TrySend() {
 		return
 	}
 
-	// 3분 경과 확인
-	if time.Since(t.lastSentTime) < sendInterval {
-		t.mu.Unlock()
-		return
-	}
-
 	// 전송할 데이터가 없으면 스킵
 	if t.stats.TotalCycles == 0 && t.stats.TotalSwordsFound == 0 &&
-		t.stats.BattleCount == 0 && t.stats.SalesCount == 0 && t.stats.FarmingAttempts == 0 {
+		t.stats.BattleCount == 0 && t.stats.SalesCount == 0 && t.stats.FarmingAttempts == 0 &&
+		t.stats.EnhanceAttempts == 0 {
 		t.mu.Unlock()
 		return
 	}
@@ -615,6 +633,7 @@ func (t *Telemetry) TrySend() {
 		OSType:        runtime.GOOS,
 		SessionID:     t.sessionID,
 		Period:        period,
+		Mode:          t.mode,
 		Stats:         t.copyStats(), // 복사본 사용
 	}
 
@@ -688,6 +707,13 @@ func (t *Telemetry) copyStats() Stats {
 	if t.stats.Session != nil {
 		sc := *t.stats.Session
 		copied.Session = &sc
+	}
+	if t.stats.EnhanceLevelDetail != nil {
+		copied.EnhanceLevelDetail = make(map[int]*EnhanceLevelStat)
+		for k, v := range t.stats.EnhanceLevelDetail {
+			vc := *v
+			copied.EnhanceLevelDetail[k] = &vc
+		}
 	}
 
 	return copied
@@ -777,7 +803,8 @@ func (t *Telemetry) Flush() {
 
 	// 전송할 데이터가 있으면 전송
 	if t.stats.TotalCycles > 0 || t.stats.TotalSwordsFound > 0 ||
-		t.stats.BattleCount > 0 || t.stats.SalesCount > 0 || t.stats.FarmingAttempts > 0 {
+		t.stats.BattleCount > 0 || t.stats.SalesCount > 0 || t.stats.FarmingAttempts > 0 ||
+		t.stats.EnhanceAttempts > 0 {
 		t.stats.SessionDuration = int(time.Since(t.sessionStart).Seconds())
 		period := time.Now().Format("2006-01-02")
 
@@ -787,6 +814,7 @@ func (t *Telemetry) Flush() {
 			OSType:        runtime.GOOS,
 			SessionID:     t.sessionID,
 			Period:        period,
+			Mode:          t.mode,
 			Stats:         t.stats,
 		}
 

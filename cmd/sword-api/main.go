@@ -163,6 +163,12 @@ type TelemetryStats struct {
 	SwordSaleStats    map[string]*SwordSaleStat    `json:"sword_sale_stats,omitempty"`
 	SwordEnhanceStats map[string]*SwordEnhanceStat `json:"sword_enhance_stats,omitempty"`
 	ItemFarmingStats  map[string]*ItemFarmingStat  `json:"item_farming_stats,omitempty"`
+
+	// === v3 새로 추가 ===
+	EnhanceLevelDetail map[int]*EnhanceLevelStat `json:"enhance_level_detail,omitempty"`
+	EnhanceCostTotal   int                        `json:"enhance_cost_total"`
+	CycleTimeTotal     float64                    `json:"cycle_time_total"`
+	BattleGoldLost     int                        `json:"battle_gold_lost"`
 }
 
 // === v2 구조체들 ===
@@ -201,6 +207,17 @@ type ItemFarmingStat struct {
 	TotalCount   int `json:"total_count"`
 	SpecialCount int `json:"special_count"`
 	NormalCount  int `json:"normal_count"`
+	TrashCount   int `json:"trash_count"`
+}
+
+// === v3 구조체들 ===
+
+// EnhanceLevelStat 레벨별 강화 상세 통계
+type EnhanceLevelStat struct {
+	Attempts int `json:"attempts"`
+	Success  int `json:"success"`
+	Fail     int `json:"fail"`
+	Destroy  int `json:"destroy"`
 }
 
 type TelemetryPayload struct {
@@ -209,6 +226,7 @@ type TelemetryPayload struct {
 	OSType        string         `json:"os_type"`
 	SessionID     string         `json:"session_id"`
 	Period        string         `json:"period"`
+	Mode          string         `json:"mode,omitempty"` // v3: 현재 모드
 	Stats         TelemetryStats `json:"stats"`
 }
 
@@ -240,6 +258,12 @@ type StatsStore struct {
 	swordSaleStats    map[string]*SwordSaleStat
 	swordEnhanceStats map[string]*SwordEnhanceStat
 	itemFarmingStats  map[string]*ItemFarmingStat
+
+	// === v3 통계 ===
+	enhanceLevelDetail map[int]*EnhanceLevelStat
+	enhanceCostTotal   int
+	cycleTimeTotal     float64
+	battleGoldLost     int
 }
 
 var stats = &StatsStore{
@@ -250,6 +274,7 @@ var stats = &StatsStore{
 	swordSaleStats:     make(map[string]*SwordSaleStat),
 	swordEnhanceStats:  make(map[string]*SwordEnhanceStat),
 	itemFarmingStats:   make(map[string]*ItemFarmingStat),
+	enhanceLevelDetail: make(map[int]*EnhanceLevelStat),
 }
 
 // ========================
@@ -329,13 +354,14 @@ func getGameData() GameData {
 	enhanceRates := make([]EnhanceRate, len(defaultEnhanceRates))
 	copy(enhanceRates, defaultEnhanceRates)
 
-	// 레벨별 강화 통계가 있으면 실측 데이터로 대체
-	for _, stat := range stats.swordEnhanceStats {
-		// 전체 강화 통계로 계산 (검 종류 무관)
-		if stat.Attempts >= minSampleSize {
-			// 레벨별 통계가 아닌 전체 통계이므로, 개별 레벨 업데이트는 추후 구현
-			// 현재는 전체 성공률만 로깅
-			break
+	// v3: 레벨별 강화 상세 통계가 있으면 실측 확률로 대체
+	for i := range enhanceRates {
+		lvl := enhanceRates[i].Level
+		if detail, ok := stats.enhanceLevelDetail[lvl]; ok && detail.Attempts >= minSampleSize {
+			total := float64(detail.Attempts)
+			enhanceRates[i].SuccessRate = float64(detail.Success) / total * 100
+			enhanceRates[i].KeepRate = float64(detail.Fail) / total * 100
+			enhanceRates[i].DestroyRate = float64(detail.Destroy) / total * 100
 		}
 	}
 
@@ -502,7 +528,26 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 			stats.itemFarmingStats[name].TotalCount += stat.TotalCount
 			stats.itemFarmingStats[name].SpecialCount += stat.SpecialCount
 			stats.itemFarmingStats[name].NormalCount += stat.NormalCount
+			stats.itemFarmingStats[name].TrashCount += stat.TrashCount
 		}
+	}
+
+	// v3 통계 (schema_version >= 3)
+	if payload.SchemaVersion >= 3 {
+		// 레벨별 강화 상세 통계
+		for lvl, stat := range payload.Stats.EnhanceLevelDetail {
+			if stats.enhanceLevelDetail[lvl] == nil {
+				stats.enhanceLevelDetail[lvl] = &EnhanceLevelStat{}
+			}
+			stats.enhanceLevelDetail[lvl].Attempts += stat.Attempts
+			stats.enhanceLevelDetail[lvl].Success += stat.Success
+			stats.enhanceLevelDetail[lvl].Fail += stat.Fail
+			stats.enhanceLevelDetail[lvl].Destroy += stat.Destroy
+		}
+
+		stats.enhanceCostTotal += payload.Stats.EnhanceCostTotal
+		stats.cycleTimeTotal += payload.Stats.CycleTimeTotal
+		stats.battleGoldLost += payload.Stats.BattleGoldLost
 	}
 	stats.mu.Unlock()
 
@@ -511,7 +556,11 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 		go saveToDB()
 	}
 
-	log.Printf("[텔레메트리] 세션=%s 버전=%s OS=%s", payload.SessionID[:8], payload.AppVersion, payload.OSType)
+	modeStr := payload.Mode
+	if modeStr == "" {
+		modeStr = "-"
+	}
+	log.Printf("[텔레메트리] 세션=%s 버전=%s OS=%s 모드=%s v%d", payload.SessionID[:8], payload.AppVersion, payload.OSType, modeStr, payload.SchemaVersion)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -678,12 +727,10 @@ func handleUpsetStats(w http.ResponseWriter, r *http.Request) {
 	stats.mu.RLock()
 	defer stats.mu.RUnlock()
 
-	// 이론 승률 (레벨 차이 1-20)
-	theoryRates := map[int]float64{
-		1: 35.0, 2: 20.0, 3: 10.0, 4: 5.0, 5: 3.0,
-		6: 2.0, 7: 1.5, 8: 1.0, 9: 0.7, 10: 0.5,
-		11: 0.35, 12: 0.25, 13: 0.18, 14: 0.12, 15: 0.08,
-		16: 0.05, 17: 0.03, 18: 0.02, 19: 0.01, 20: 0.005,
+	// 이론 승률: defaultBattleRewards에서 추출
+	theoryRates := make(map[int]float64)
+	for _, br := range defaultBattleRewards {
+		theoryRates[br.LevelDiff] = br.WinRate
 	}
 
 	type DiffStat struct {
@@ -945,6 +992,55 @@ func handleOptimalSellPoint(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// v3: 레벨별 강화 실측 통계
+func handleEnhanceLevelDetail(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	stats.mu.RLock()
+	defer stats.mu.RUnlock()
+
+	type LevelEntry struct {
+		Level       int     `json:"level"`
+		Attempts    int     `json:"attempts"`
+		Success     int     `json:"success"`
+		Fail        int     `json:"fail"`
+		Destroy     int     `json:"destroy"`
+		SuccessRate float64 `json:"success_rate"`
+		KeepRate    float64 `json:"keep_rate"`
+		DestroyRate float64 `json:"destroy_rate"`
+		Default     bool    `json:"is_default"` // 기본값 사용 여부
+	}
+
+	var levels []LevelEntry
+	for _, def := range defaultEnhanceRates {
+		entry := LevelEntry{
+			Level:       def.Level,
+			SuccessRate: def.SuccessRate,
+			KeepRate:    def.KeepRate,
+			DestroyRate: def.DestroyRate,
+			Default:     true,
+		}
+		if detail, ok := stats.enhanceLevelDetail[def.Level]; ok && detail.Attempts > 0 {
+			entry.Attempts = detail.Attempts
+			entry.Success = detail.Success
+			entry.Fail = detail.Fail
+			entry.Destroy = detail.Destroy
+			total := float64(detail.Attempts)
+			entry.SuccessRate = float64(detail.Success) / total * 100
+			entry.KeepRate = float64(detail.Fail) / total * 100
+			entry.DestroyRate = float64(detail.Destroy) / total * 100
+			entry.Default = detail.Attempts < minSampleSize
+		}
+		levels = append(levels, entry)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"min_sample_size": minSampleSize,
+		"levels":          levels,
+	})
+}
+
 func generateSignature(sessionID, period string) string {
 	h := sha256.Sum256([]byte(sessionID + period + getAppSecret()))
 	return hex.EncodeToString(h[:])[:16]
@@ -1001,6 +1097,9 @@ func validateTelemetryPayload(p *TelemetryPayload) error {
 	if len(p.Stats.ItemFarmingStats) > maxMapEntries {
 		return fmt.Errorf("item_farming_stats too many entries")
 	}
+	if len(p.Stats.EnhanceLevelDetail) > maxMapEntries {
+		return fmt.Errorf("enhance_level_detail too many entries")
+	}
 
 	// 맵 키 길이 검증
 	for name := range p.Stats.SwordBattleStats {
@@ -1055,6 +1154,22 @@ func validateStatValues(s *TelemetryStats) error {
 		}
 		if count < 0 || count > maxStatValue {
 			return fmt.Errorf("invalid enhance count for level %d", level)
+		}
+	}
+
+	// v3 값 검증
+	if s.EnhanceCostTotal < 0 || s.BattleGoldLost < 0 {
+		return fmt.Errorf("negative v3 gold values")
+	}
+	if s.CycleTimeTotal < 0 {
+		return fmt.Errorf("negative cycle time")
+	}
+	for lvl, stat := range s.EnhanceLevelDetail {
+		if lvl < 0 || lvl > 20 {
+			return fmt.Errorf("invalid enhance level detail: %d", lvl)
+		}
+		if stat != nil && (stat.Attempts < 0 || stat.Success < 0 || stat.Fail < 0 || stat.Destroy < 0) {
+			return fmt.Errorf("negative enhance level detail for level %d", lvl)
 		}
 	}
 
@@ -1147,7 +1262,16 @@ func initDB() error {
 			name TEXT PRIMARY KEY,
 			total_count INTEGER DEFAULT 0,
 			special_count INTEGER DEFAULT 0,
-			normal_count INTEGER DEFAULT 0
+			normal_count INTEGER DEFAULT 0,
+			trash_count INTEGER DEFAULT 0
+		)`,
+		// v3 테이블
+		`CREATE TABLE IF NOT EXISTS enhance_level_detail (
+			level INTEGER PRIMARY KEY,
+			attempts INTEGER DEFAULT 0,
+			success INTEGER DEFAULT 0,
+			fail INTEGER DEFAULT 0,
+			destroy INTEGER DEFAULT 0
 		)`,
 	}
 
@@ -1155,6 +1279,17 @@ func initDB() error {
 		if _, err := db.Exec(ddl); err != nil {
 			return fmt.Errorf("테이블 생성 실패: %v", err)
 		}
+	}
+
+	// v3 마이그레이션: global_stats에 새 컬럼 추가 (이미 있으면 무시)
+	migrations := []string{
+		"ALTER TABLE global_stats ADD COLUMN enhance_cost_total INTEGER DEFAULT 0",
+		"ALTER TABLE global_stats ADD COLUMN cycle_time_total REAL DEFAULT 0",
+		"ALTER TABLE global_stats ADD COLUMN battle_gold_lost INTEGER DEFAULT 0",
+		"ALTER TABLE item_farming_stats ADD COLUMN trash_count INTEGER DEFAULT 0",
+	}
+	for _, m := range migrations {
+		db.Exec(m) // 이미 존재하면 에러 → 무시
 	}
 
 	// global_stats 초기 행 (없으면 생성)
@@ -1168,12 +1303,13 @@ func loadFromDB() error {
 	stats.mu.Lock()
 	defer stats.mu.Unlock()
 
-	// global_stats 로드
-	row := db.QueryRow("SELECT enhance_attempts, enhance_success, enhance_fail, enhance_destroy, battle_count, battle_wins, upset_attempts, upset_wins, battle_gold, farming_attempts, special_found, sales_count, sales_total_gold FROM global_stats WHERE id=1")
+	// global_stats 로드 (v3 컬럼 포함)
+	row := db.QueryRow("SELECT enhance_attempts, enhance_success, enhance_fail, enhance_destroy, battle_count, battle_wins, upset_attempts, upset_wins, battle_gold, farming_attempts, special_found, sales_count, sales_total_gold, COALESCE(enhance_cost_total,0), COALESCE(cycle_time_total,0), COALESCE(battle_gold_lost,0) FROM global_stats WHERE id=1")
 	if err := row.Scan(
 		&stats.enhanceAttempts, &stats.enhanceSuccess, &stats.enhanceFail, &stats.enhanceDestroy,
 		&stats.battleCount, &stats.battleWins, &stats.upsetAttempts, &stats.upsetWins, &stats.battleGold,
 		&stats.farmingAttempts, &stats.specialFound, &stats.salesCount, &stats.salesTotalGold,
+		&stats.enhanceCostTotal, &stats.cycleTimeTotal, &stats.battleGoldLost,
 	); err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("global_stats 로드 실패: %v", err)
 	}
@@ -1262,7 +1398,7 @@ func loadFromDB() error {
 	}
 
 	// item_farming_stats 로드
-	rows, err = db.Query("SELECT name, total_count, special_count, normal_count FROM item_farming_stats")
+	rows, err = db.Query("SELECT name, total_count, special_count, normal_count, COALESCE(trash_count,0) FROM item_farming_stats")
 	if err != nil {
 		return fmt.Errorf("item_farming_stats 로드 실패: %v", err)
 	}
@@ -1270,8 +1406,22 @@ func loadFromDB() error {
 	for rows.Next() {
 		var name string
 		s := &ItemFarmingStat{}
-		if err := rows.Scan(&name, &s.TotalCount, &s.SpecialCount, &s.NormalCount); err == nil {
+		if err := rows.Scan(&name, &s.TotalCount, &s.SpecialCount, &s.NormalCount, &s.TrashCount); err == nil {
 			stats.itemFarmingStats[name] = s
+		}
+	}
+
+	// v3: enhance_level_detail 로드
+	rows, err = db.Query("SELECT level, attempts, success, fail, destroy FROM enhance_level_detail")
+	if err != nil {
+		return fmt.Errorf("enhance_level_detail 로드 실패: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var level int
+		s := &EnhanceLevelStat{}
+		if err := rows.Scan(&level, &s.Attempts, &s.Success, &s.Fail, &s.Destroy); err == nil {
+			stats.enhanceLevelDetail[level] = s
 		}
 	}
 
@@ -1290,15 +1440,17 @@ func saveToDB() {
 	}
 	defer tx.Rollback()
 
-	// global_stats 저장
+	// global_stats 저장 (v3 컬럼 포함)
 	tx.Exec(`UPDATE global_stats SET
 		enhance_attempts=?, enhance_success=?, enhance_fail=?, enhance_destroy=?,
 		battle_count=?, battle_wins=?, upset_attempts=?, upset_wins=?, battle_gold=?,
-		farming_attempts=?, special_found=?, sales_count=?, sales_total_gold=?
+		farming_attempts=?, special_found=?, sales_count=?, sales_total_gold=?,
+		enhance_cost_total=?, cycle_time_total=?, battle_gold_lost=?
 		WHERE id=1`,
 		stats.enhanceAttempts, stats.enhanceSuccess, stats.enhanceFail, stats.enhanceDestroy,
 		stats.battleCount, stats.battleWins, stats.upsetAttempts, stats.upsetWins, stats.battleGold,
 		stats.farmingAttempts, stats.specialFound, stats.salesCount, stats.salesTotalGold,
+		stats.enhanceCostTotal, stats.cycleTimeTotal, stats.battleGoldLost,
 	)
 
 	// enhance_by_level 저장
@@ -1337,8 +1489,14 @@ func saveToDB() {
 
 	// item_farming_stats 저장
 	for name, s := range stats.itemFarmingStats {
-		tx.Exec("INSERT OR REPLACE INTO item_farming_stats (name, total_count, special_count, normal_count) VALUES (?, ?, ?, ?)",
-			name, s.TotalCount, s.SpecialCount, s.NormalCount)
+		tx.Exec("INSERT OR REPLACE INTO item_farming_stats (name, total_count, special_count, normal_count, trash_count) VALUES (?, ?, ?, ?, ?)",
+			name, s.TotalCount, s.SpecialCount, s.NormalCount, s.TrashCount)
+	}
+
+	// v3: enhance_level_detail 저장
+	for lvl, s := range stats.enhanceLevelDetail {
+		tx.Exec("INSERT OR REPLACE INTO enhance_level_detail (level, attempts, success, fail, destroy) VALUES (?, ?, ?, ?, ?)",
+			lvl, s.Attempts, s.Success, s.Fail, s.Destroy)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1376,10 +1534,12 @@ func main() {
 	http.HandleFunc("/api/stats/enhance", handleEnhanceStats)
 	http.HandleFunc("/api/stats/sales", handleSaleStats)
 	http.HandleFunc("/api/strategy/optimal-sell-point", handleOptimalSellPoint)
+	// v3 엔드포인트
+	http.HandleFunc("/api/stats/enhance-levels", handleEnhanceLevelDetail)
 
 	log.Printf("🚀 Sword API 서버 시작 (포트: %s)", port)
-	log.Printf("   /api/game-data - 게임 데이터 조회")
-	log.Printf("   /api/telemetry - 텔레메트리 수신")
+	log.Printf("   /api/game-data - 게임 데이터 조회 (실측 확률 반영)")
+	log.Printf("   /api/telemetry - 텔레메트리 수신 (v3 스키마)")
 	log.Printf("   /api/stats/detailed - 커뮤니티 통계")
 	log.Printf("   /api/stats/swords - 검 종류별 승률 (v2)")
 	log.Printf("   /api/stats/special - 특수 검 출현 확률 (v2)")
@@ -1387,7 +1547,8 @@ func main() {
 	log.Printf("   /api/stats/items - 아이템 파밍 통계 (v2)")
 	log.Printf("   /api/stats/enhance - 검 종류별 강화 성공률 (v2)")
 	log.Printf("   /api/stats/sales - 검+레벨별 판매 통계 (v2)")
-	log.Printf("   /api/strategy/optimal-sell-point - 최적 판매 시점 (v2)")
+	log.Printf("   /api/stats/enhance-levels - 레벨별 강화 확률 (v3)")
+	log.Printf("   /api/strategy/optimal-sell-point - 최적 판매 시점")
 
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatal(err)

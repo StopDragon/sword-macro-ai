@@ -227,17 +227,20 @@ func (e *Engine) ReportSwordComplete() {
 }
 
 // ReportGoldMineCycle 골드 채굴 사이클 완료 보고
-func (e *Engine) ReportGoldMineCycle(itemName string, level, goldEarned, currentGold int) {
+func (e *Engine) ReportGoldMineCycle(itemName string, level, goldEarned, currentGold, enhanceCost int, cycleTimeSec float64) {
 	e.telem.RecordCycle(true)
 	e.telem.RecordGold(goldEarned)
 	e.telem.RecordSaleWithSword(itemName, level, goldEarned)
 	e.telem.RecordGoldChange(currentGold)
+	e.telem.RecordEnhanceCost(enhanceCost)
+	e.telem.RecordCycleTime(cycleTimeSec)
 	e.telem.TrySend()
 }
 
 // ReportCycleFailed 사이클 실패 보고
 func (e *Engine) ReportCycleFailed() {
 	e.telem.RecordCycle(false)
+	e.telem.TrySend()
 }
 
 // =============================================================================
@@ -438,8 +441,9 @@ func PrintUpsetAnalysis(level, gold int) {
 // =============================================================================
 
 // ReportBattleCycle 배틀 사이클 완료 보고
-func (e *Engine) ReportBattleCycle(swordName string, myLevel, targetLevel int, won bool, goldEarned, currentGold int) {
-	e.telem.RecordBattleWithSword(swordName, myLevel, targetLevel, won, goldEarned)
+// goldChange: 승리 시 양수(보상), 패배 시 음수(손실) 또는 0
+func (e *Engine) ReportBattleCycle(swordName string, myLevel, targetLevel int, won bool, goldChange, currentGold int) {
+	e.telem.RecordBattleWithSword(swordName, myLevel, targetLevel, won, goldChange)
 	e.telem.RecordGoldChange(currentGold)
 	e.telem.TrySend()
 }

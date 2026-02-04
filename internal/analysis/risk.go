@@ -3,30 +3,9 @@ package analysis
 import (
 	"fmt"
 	"math"
-)
 
-// 강화 확률표 (공식)
-var enhanceProbabilities = map[int]struct {
-	Success float64
-	Hold    float64
-	Destroy float64
-}{
-	1:  {90, 10, 0},
-	2:  {85, 15, 0},
-	3:  {80, 20, 0},
-	4:  {75, 25, 0},
-	5:  {60, 35, 5},
-	6:  {55, 35, 10},
-	7:  {50, 35, 15},
-	8:  {45, 35, 20},
-	9:  {35, 40, 25},
-	10: {25, 45, 30},
-	11: {15, 50, 35},
-	12: {10, 50, 40},
-	13: {7, 53, 40},
-	14: {5, 55, 40},
-	15: {3, 57, 40},
-}
+	"github.com/StopDragon/sword-macro-ai/internal/game"
+)
 
 // RiskAnalysis 리스크 분석 결과
 type RiskAnalysis struct {
@@ -82,7 +61,7 @@ func CalcRisk(currentLevel, currentGold, targetLevel int) *RiskAnalysis {
 	return analysis
 }
 
-// calculateSuccessProb 목표 도달 확률 계산
+// calculateSuccessProb 목표 도달 확률 계산 (API 데이터 기반)
 func calculateSuccessProb(currentLevel, targetLevel int) float64 {
 	if currentLevel >= targetLevel {
 		return 100.0
@@ -90,17 +69,15 @@ func calculateSuccessProb(currentLevel, targetLevel int) float64 {
 
 	prob := 1.0
 	for level := currentLevel; level < targetLevel; level++ {
-		if p, ok := enhanceProbabilities[level]; ok {
-			// 각 레벨 강화 성공 확률을 곱함 (파괴 없이 성공할 확률)
-			levelProb := p.Success / 100.0
-			// 파괴 고려: 평균적으로 몇 번 시도해야 성공하는지
-			if p.Destroy > 0 {
-				// 파괴 시 다시 시작해야 하므로 복잡한 계산 필요
-				// 간이 계산: 파괴 확률만큼 확률 감소
-				levelProb *= (1 - p.Destroy/100.0*0.5) // 파괴 시 절반 확률 감소로 근사
-			}
-			prob *= levelProb
+		rate := game.GetEnhanceRate(level)
+		if rate == nil {
+			continue
 		}
+		levelProb := rate.SuccessRate / 100.0
+		if rate.DestroyRate > 0 {
+			levelProb *= (1 - rate.DestroyRate/100.0*0.5)
+		}
+		prob *= levelProb
 	}
 
 	return math.Max(0, math.Min(100, prob*100))
@@ -128,104 +105,89 @@ func calculateRuinProb(currentLevel, targetLevel, currentGold int) float64 {
 }
 
 // calculateExpectedCost 예상 소요 골드 (강화 비용)
+// 강화 비용 = 해당 레벨 검 가격의 약 10% (간이 추정)
 func calculateExpectedCost(currentLevel, targetLevel int) int {
-	// 강화 비용 테이블 (예시)
-	enhanceCost := map[int]int{
-		1: 100, 2: 200, 3: 400, 4: 800, 5: 1500,
-		6: 3000, 7: 5000, 8: 8000, 9: 15000, 10: 25000,
-		11: 40000, 12: 60000, 13: 80000, 14: 100000, 15: 150000,
-	}
-
 	totalCost := 0
 	for level := currentLevel; level < targetLevel; level++ {
-		cost, ok := enhanceCost[level]
-		if !ok {
-			cost = 50000 // 기본값
+		// 강화 비용은 해당 레벨 검 평균 가격의 10%로 추정
+		price := game.GetSwordPrice(level)
+		cost := 100 // 기본값
+		if price != nil {
+			cost = price.AvgPrice / 10
+			if cost < 100 {
+				cost = 100
+			}
 		}
 
-		prob, ok := enhanceProbabilities[level]
-		if !ok {
+		rate := game.GetEnhanceRate(level)
+		if rate == nil || rate.SuccessRate <= 0 {
 			continue
 		}
 
-		// 평균 시도 횟수 = 1 / 성공확률
-		avgTrials := 1.0 / (prob.Success / 100.0)
+		avgTrials := 1.0 / (rate.SuccessRate / 100.0)
 		totalCost += int(float64(cost) * avgTrials)
 	}
 
 	return totalCost
 }
 
-// calculateExpectedTrials 예상 시도 횟수
+// calculateExpectedTrials 예상 시도 횟수 (API 데이터 기반)
 func calculateExpectedTrials(currentLevel, targetLevel int) int {
 	trials := 0
 	for level := currentLevel; level < targetLevel; level++ {
-		if prob, ok := enhanceProbabilities[level]; ok {
-			avgTrials := 1.0 / (prob.Success / 100.0)
+		rate := game.GetEnhanceRate(level)
+		if rate != nil && rate.SuccessRate > 0 {
+			avgTrials := 1.0 / (rate.SuccessRate / 100.0)
 			trials += int(math.Ceil(avgTrials))
 		}
 	}
 	return trials
 }
 
-// calculateKellyRatio 켈리 기준 최적 배팅 비율
+// calculateKellyRatio 켈리 기준 최적 배팅 비율 (API 데이터 기반)
 // Kelly = (bp - q) / b
-// b = 승리 시 수익률, p = 승리 확률, q = 패배 확률
 func calculateKellyRatio(currentLevel, targetLevel int) float64 {
 	if currentLevel >= targetLevel {
 		return 0
 	}
 
-	// 다음 강화의 켈리 비율 계산
-	prob, ok := enhanceProbabilities[currentLevel]
-	if !ok {
-		return 0.05 // 기본 보수적 비율
+	rate := game.GetEnhanceRate(currentLevel)
+	if rate == nil {
+		return 0.05
 	}
 
-	p := prob.Success / 100.0
+	p := rate.SuccessRate / 100.0
 	q := 1 - p
-
-	// 간이 수익률 계산 (성공 시 레벨업 가치)
-	b := 1.5 // 대략적 수익률
+	b := 1.5
 
 	kelly := (b*p - q) / b
-	// 보수적으로 절반 켈리 사용
 	return math.Max(0, math.Min(0.25, kelly*0.5))
 }
 
-// calculateExpectedDrawdown 예상 최대 낙폭
+// calculateExpectedDrawdown 예상 최대 낙폭 (API 데이터 기반)
 func calculateExpectedDrawdown(currentLevel, targetLevel int) float64 {
-	// 파괴 확률 기반 예상 낙폭
 	maxDestroy := 0.0
 	for level := currentLevel; level < targetLevel; level++ {
-		if prob, ok := enhanceProbabilities[level]; ok {
-			if prob.Destroy > maxDestroy {
-				maxDestroy = prob.Destroy
-			}
+		rate := game.GetEnhanceRate(level)
+		if rate != nil && rate.DestroyRate > maxDestroy {
+			maxDestroy = rate.DestroyRate
 		}
 	}
 
-	// 파괴 확률이 높을수록 낙폭 증가
 	return math.Min(80, maxDestroy*1.5+10)
 }
 
-// calculateExpectedGold 기대 최종 골드
+// calculateExpectedGold 기대 최종 골드 (API 데이터 기반)
 func calculateExpectedGold(currentLevel, targetLevel, currentGold int) int {
-	// 판매가 테이블 (예시)
-	sellPrice := map[int]int{
-		5: 5000, 6: 10000, 7: 20000, 8: 40000, 9: 80000,
-		10: 150000, 11: 300000, 12: 600000, 13: 1200000, 14: 2500000, 15: 5000000,
-	}
-
 	successProb := calculateSuccessProb(currentLevel, targetLevel)
 	expectedCost := calculateExpectedCost(currentLevel, targetLevel)
 
-	targetPrice, ok := sellPrice[targetLevel]
-	if !ok {
-		targetPrice = 100000 // 기본값
+	targetPrice := 100000 // 기본값
+	price := game.GetSwordPrice(targetLevel)
+	if price != nil {
+		targetPrice = price.AvgPrice
 	}
 
-	// 기대값 = (성공확률 * 판매가) - 예상비용
 	expectedReturn := int(float64(targetPrice)*(successProb/100)) - expectedCost
 	return currentGold + expectedReturn
 }
@@ -275,7 +237,7 @@ func FormatRiskAnalysis(r *RiskAnalysis) string {
 
 💡 추천: %s`,
 		r.CurrentLevel,
-		formatGold(r.CurrentGold),
+		game.FormatGold(r.CurrentGold),
 		r.TargetLevel,
 		r.SuccessProb,
 		r.RuinProb,
@@ -290,31 +252,6 @@ func FormatRiskAnalysis(r *RiskAnalysis) string {
 	}
 
 	return result
-}
-
-// formatGold 골드를 콤마 표기로 포맷 (game.FormatGold와 동일, 순환참조 방지용)
-func formatGold(gold int) string {
-	if gold == 0 {
-		return "0"
-	}
-	s := ""
-	negative := false
-	n := gold
-	if n < 0 {
-		negative = true
-		n = -n
-	}
-	for n > 0 {
-		if s != "" && len(s)%4 == 3 {
-			s = "," + s
-		}
-		s = string(rune('0'+n%10)) + s
-		n /= 10
-	}
-	if negative {
-		s = "-" + s
-	}
-	return s
 }
 
 func translateRecommendation(rec string) string {
