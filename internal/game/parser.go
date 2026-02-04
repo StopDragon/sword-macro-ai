@@ -73,6 +73,10 @@ var (
 	trashPattern        = regexp.MustCompile(`(?:낡은|일반|노말|커먼|쓰레기)`)
 	farmPattern    = regexp.MustCompile(`(?:획득|얻었|드랍|뽑기)`)
 
+	// 파괴 시 새 검 지급 패턴: "『[+0] 낡은 검』 지급되었습니다"
+	destroyNewSwordPattern = regexp.MustCompile(`지급되었습니다`)
+	destroySwordNamePattern = regexp.MustCompile(`『\[\+?(\d+)\]\s*([^』]+)』\s*지급`)
+
 	// 판매 관련 패턴
 	cantSellPattern   = regexp.MustCompile(`(?:판매할 수 없|가치가 없|팔 수 없)`)
 	newSwordPattern   = regexp.MustCompile(`새로운 검.*획득|검.*획득`)
@@ -376,6 +380,17 @@ func ExtractSaleResult(text string) *SaleResult {
 		return nil
 	}
 	return result
+}
+
+// ExtractDestroyNewSword 파괴 시 지급된 새 검 정보 추출
+// 형식: "『[+0] 낡은 검』 지급되었습니다" → (name="낡은 검", level=0, found=true)
+func ExtractDestroyNewSword(text string) (string, int, bool) {
+	if match := destroySwordNamePattern.FindStringSubmatch(text); len(match) >= 3 {
+		level, _ := strconv.Atoi(match[1])
+		name := strings.TrimSpace(match[2])
+		return name, level, true
+	}
+	return "", 0, false
 }
 
 // DetermineItemType 아이템 이름으로 타입 결정 (v3 로직)

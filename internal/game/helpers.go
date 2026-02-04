@@ -123,11 +123,18 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 		if state.LastResult == "destroy" {
 			result := EnhanceResult{FinalLevel: currentLevel, Success: false, Destroyed: true}
 
-			// 파괴 시 새 검 정보 추출 (판매 결과와 동일한 패턴 사용)
-			saleResult := ExtractSaleResult(text)
-			if saleResult != nil && saleResult.NewSwordName != "" {
-				result.NewSwordName = saleResult.NewSwordName
-				result.NewSwordType = DetermineItemType(saleResult.NewSwordName)
+			// 파괴 시 새 검 정보 추출
+			// 1순위: 파괴 전용 패턴 "『[+0] 낡은 검』 지급되었습니다"
+			if name, _, found := ExtractDestroyNewSword(text); found {
+				result.NewSwordName = name
+				result.NewSwordType = DetermineItemType(name)
+			} else {
+				// 2순위: 판매 패턴 fallback "새로운 검 획득: [+0] 낡은 검"
+				saleResult := ExtractSaleResult(text)
+				if saleResult != nil && saleResult.NewSwordName != "" {
+					result.NewSwordName = saleResult.NewSwordName
+					result.NewSwordType = DetermineItemType(saleResult.NewSwordName)
+				}
 			}
 
 			return result

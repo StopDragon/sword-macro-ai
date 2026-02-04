@@ -1420,21 +1420,22 @@ func (e *Engine) waitForResponseInternal(maxWait time.Duration, raw bool) string
 }
 
 // filterMyMessages 내 메시지만 필터링 (가장 최근 @이름 섹션만)
+// 다른 유저의 강화 결과가 섞이는 것을 방지
+// 예: "플레이봇 @권혁진 〖💦강화 유지💦〗" + "[+12] 검이름" 이 내 결과에 혼입되는 문제 차단
 func (e *Engine) filterMyMessages(text string) string {
 	if e.sessionProfile == nil || e.sessionProfile.Name == "" {
 		return text // 프로필 없으면 전체 반환
 	}
 
-	myName := e.sessionProfile.Name
+	myName := e.sessionProfile.Name // "@행복사랑평화" 형식
 	lines := strings.Split(text, "\n")
 
 	// 가장 마지막 내 메시지 섹션의 시작점 찾기
+	// "플레이봇 @내이름" 패턴 (게임봇이 나에게 보낸 결과)
 	lastMyIndex := -1
 	for i, line := range lines {
-		if strings.Contains(line, "@") {
-			if strings.Contains(line, myName) {
-				lastMyIndex = i // 마지막 내 섹션 시작점 갱신
-			}
+		if strings.Contains(line, myName) {
+			lastMyIndex = i // 마지막 내 섹션 시작점 갱신
 		}
 	}
 
@@ -1448,12 +1449,11 @@ func (e *Engine) filterMyMessages(text string) string {
 	for i := lastMyIndex; i < len(lines); i++ {
 		line := lines[i]
 
-		// 다른 사람의 섹션이 시작되면 중단
-		if i > lastMyIndex && strings.Contains(line, "@") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "@") && !strings.Contains(line, myName) {
-				break
-			}
+		// 다른 유저의 게임 메시지가 시작되면 중단
+		// @가 포함되어 있지만 내 이름(@myName)이 없는 줄 = 다른 유저의 영역
+		// 예: "12:21 플레이봇 @권혁진 〖결과〗" 또는 "12:21 권혁진 @플레이봇 강화"
+		if i > lastMyIndex && strings.Contains(line, "@") && !strings.Contains(line, myName) {
+			break
 		}
 
 		result = append(result, line)
