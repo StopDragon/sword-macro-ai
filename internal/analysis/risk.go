@@ -292,13 +292,29 @@ func FormatRiskAnalysis(r *RiskAnalysis) string {
 	return result
 }
 
+// formatGold 골드를 콤마 표기로 포맷 (game.FormatGold와 동일, 순환참조 방지용)
 func formatGold(gold int) string {
-	if gold >= 10000000 {
-		return fmt.Sprintf("%.1f천만", float64(gold)/10000000)
-	} else if gold >= 10000 {
-		return fmt.Sprintf("%.1f만", float64(gold)/10000)
+	if gold == 0 {
+		return "0"
 	}
-	return fmt.Sprintf("%d", gold)
+	s := ""
+	negative := false
+	n := gold
+	if n < 0 {
+		negative = true
+		n = -n
+	}
+	for n > 0 {
+		if s != "" && len(s)%4 == 3 {
+			s = "," + s
+		}
+		s = string(rune('0'+n%10)) + s
+		n /= 10
+	}
+	if negative {
+		s = "-" + s
+	}
+	return s
 }
 
 func translateRecommendation(rec string) string {

@@ -23,6 +23,6 @@ build/
 *.exe
 
 # Build binaries
-sword-api
-sword-macro
+/sword-api
+/sword-macro
 .telemetry_state.json

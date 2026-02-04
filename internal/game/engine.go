@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/StopDragon/sword-macro-ai/internal/analysis"
 	"github.com/StopDragon/sword-macro-ai/internal/config"
 	"github.com/StopDragon/sword-macro-ai/internal/input"
 	"github.com/StopDragon/sword-macro-ai/internal/logger"
@@ -57,12 +56,11 @@ type Engine struct {
 	// 핫키
 	hotkeyMgr *input.HotkeyManager
 
-	// v2: 세션 분석 및 알림
-	session *analysis.SessionTracker
-	alerts  *analysis.AlertEngine
-
 	// 세션 프로필 (필터링용)
 	sessionProfile *Profile // 세션 시작 시 저장된 프로필
+
+	// 이전 RAW 텍스트 (응답 변경 감지용)
+	lastRawChatText string
 
 	// 세션 통계 (종료 시 출력용)
 	sessionStats struct {
@@ -415,10 +413,10 @@ func (e *Engine) setupAndRun() {
 	}
 
 	// 채팅 상태 초기화 (첫 로그에 전체 이력 방지)
-	initialText := e.readChatText()
+	// RAW 텍스트 저장 (변경 감지 기준점)
+	initialText := e.readChatClipboard()
 	if initialText != "" {
-		lastChatText = initialText
-		logger.ChatText(initialText) // 로거도 초기화 (내부적으로 lastLoggedText 설정)
+		e.lastRawChatText = initialText
 	}
 
 	// 모드별 실행
@@ -584,20 +582,23 @@ func (e *Engine) loopEnhance() {
 
 	fmt.Println()
 
+	// 시작 레벨/검 이름 초기화 (sessionProfile에서, readGameState 아님)
+	currentLevel := 0
+	swordName := ""
+	if e.sessionProfile != nil {
+		currentLevel = e.sessionProfile.Level
+		swordName = e.sessionProfile.SwordName
+	}
+
+	// 변경 감지 기준점 초기화
+	e.ResetLastChatText()
+
 	for e.running {
 		if e.checkStop() {
 			return
 		}
 
-		// 현재 상태 읽기
-		state := e.readGameState()
-		if state == nil {
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-
-		// 목표 달성 확인 (공통 헬퍼 사용)
-		currentLevel := e.ExtractCurrentLevel(state)
+		// 목표 달성 확인
 		if e.IsTargetReached(currentLevel) {
 			fmt.Printf("\n🎉 목표 달성! +%d\n", currentLevel)
 			logger.Info("목표 달성: +%d", currentLevel)
@@ -626,26 +627,63 @@ func (e *Engine) loopEnhance() {
 			}
 		}
 
-		if text != "" {
-			// 골드 부족 체크
-			goldInfo := DetectInsufficientGold(text)
-			if goldInfo.IsInsufficient {
-				overlay.UpdateStatus("⚔️ 강화 중단\n💰 골드 부족!\n필요: %s\n보유: %s",
-					FormatGold(goldInfo.RequiredGold), FormatGold(goldInfo.RemainingGold))
-				e.handleInsufficientGold(goldInfo)
-				return
-			}
+		if text == "" {
+			continue
+		}
 
-			// 강화 결과에서 레벨 확인하여 목표 달성 시 즉시 종료
-			if resultState := ParseOCRText(text); resultState != nil {
-				resultLevel := e.ExtractCurrentLevel(resultState)
-				if e.IsTargetReached(resultLevel) {
-					fmt.Printf("\n🎉 목표 달성! +%d\n", resultLevel)
-					logger.Info("목표 달성: +%d", resultLevel)
-					overlay.UpdateStatus("⚔️ 강화 완료!\n🎉 +%d 달성!\n\n📋 판단: 목표 도달 → 완료", resultLevel)
-					e.ReportSwordComplete()
-					return
-				}
+		// 골드 부족 체크
+		goldInfo := DetectInsufficientGold(text)
+		if goldInfo.IsInsufficient {
+			overlay.UpdateStatus("⚔️ 강화 중단\n💰 골드 부족!\n필요: %s\n보유: %s",
+				FormatGold(goldInfo.RequiredGold), FormatGold(goldInfo.RemainingGold))
+			e.handleInsufficientGold(goldInfo)
+			return
+		}
+
+		// 강화 결과 파싱 + 상태 추적
+		state := ParseOCRText(text)
+		if state == nil {
+			continue
+		}
+
+		switch state.LastResult {
+		case "destroy":
+			e.sessionStats.enhanceDestroy++
+			e.telem.RecordEnhanceWithSword(swordName, currentLevel, "destroy")
+			fmt.Printf("  💥 +%d에서 파괴!\n", currentLevel)
+			overlay.UpdateStatus("⚔️ 강화 중\n💥 +%d 파괴!\n\n📋 판단: 새 검으로 재시작", currentLevel)
+
+			// 새 검 정보 추출
+			if name, _, found := ExtractDestroyNewSword(text); found {
+				swordName = name
+			} else {
+				swordName = "낡은 검"
+			}
+			currentLevel = 0
+
+		case "success":
+			e.sessionStats.enhanceSuccess++
+			if state.ResultLevel > 0 {
+				currentLevel = state.ResultLevel
+			} else {
+				currentLevel++
+			}
+			e.telem.RecordEnhanceWithSword(swordName, currentLevel-1, "success")
+			fmt.Printf("  ⚔️ 강화 성공! +%d\n", currentLevel)
+			overlay.UpdateStatus("⚔️ 강화 중\n현재: +%d → 목표: +%d\n\n📋 판단: 성공!", currentLevel, e.targetLevel)
+
+		case "hold":
+			e.sessionStats.enhanceHold++
+			if state.ResultLevel > 0 && state.ResultLevel != currentLevel {
+				currentLevel = state.ResultLevel
+			}
+			e.telem.RecordEnhanceWithSword(swordName, currentLevel, "hold")
+			fmt.Printf("  💫 +%d 유지\n", currentLevel)
+
+		default:
+			// 결과 불명확 — ResultLevel로 동기화 시도
+			if state.ResultLevel > 0 && state.ResultLevel != currentLevel {
+				currentLevel = state.ResultLevel
 			}
 		}
 	}
@@ -867,7 +905,7 @@ func (e *Engine) loopGoldMine() {
 			saleResult := ExtractSaleResult(saleText)
 			if saleResult != nil && saleResult.SaleGold > 0 {
 				e.totalGold += saleResult.SaleGold
-				fmt.Printf("💰 판매 완료: +%dG\n", saleResult.SaleGold)
+				fmt.Printf("💰 판매 완료: +%sG\n", FormatGold(saleResult.SaleGold))
 			}
 		}
 	}
@@ -1052,8 +1090,8 @@ func (e *Engine) loopGoldMine() {
 			e.cycleCount, itemName, finalLevel,
 			FormatGold(saleGold), FormatGold(enhanceCost), FormatGold(netProfit), FormatGold(e.totalGold))
 
-		fmt.Printf("📦 사이클 #%d: %.1f초 | 판매 +%dG - 강화 %dG = 순수익 %+dG | 누적: %dG [%s +%d %s]\n",
-			e.cycleCount, cycleTime.Seconds(), saleGold, enhanceCost, netProfit, e.totalGold, itemName, finalLevel, typeLabel)
+		fmt.Printf("📦 사이클 #%d: %.1f초 | 판매 +%sG - 강화 %sG = 순수익 %sG | 누적: %sG [%s +%d %s]\n",
+			e.cycleCount, cycleTime.Seconds(), FormatGold(saleGold), FormatGold(enhanceCost), FormatGold(netProfit), FormatGold(e.totalGold), itemName, finalLevel, typeLabel)
 	}
 }
 
@@ -1096,11 +1134,10 @@ func (e *Engine) loopBattle() {
 			fmt.Println("🔄 타겟 목록 갱신 중...")
 
 			// 2. 랭킹에서 유저 목록 가져오기
+			e.SaveLastChatText()
 			e.sendCommand("/랭킹")
-			time.Sleep(2 * time.Second)
-
-			// 랭킹은 다른 유저 이름이 포함되므로 필터링 없이 읽기
-			rankingText := e.readChatClipboard()
+			// 랭킹은 다른 유저 이름이 포함되므로 Raw 사용
+			rankingText := e.waitForResponseRaw(5 * time.Second)
 			entries := ParseRanking(rankingText)
 			usernames := ExtractUsernamesFromRanking(entries)
 
@@ -1178,11 +1215,28 @@ func (e *Engine) loopBattle() {
 			e.cycleCount, target.Username, target.Level, e.myProfile.Level,
 			FormatGold(e.totalGold), winRate, e.battleWins, e.battleLosses)
 
+		e.SaveLastChatText()
 		e.sendCommand("/배틀 " + target.Username)
-		time.Sleep(3 * time.Second)
+		// 배틀 결과는 상대 이름 포함 → filterMyMessages가 패배 결과를 제거할 수 있으므로 Raw 사용
+		resultText := e.waitForResponseRaw(5 * time.Second)
 
-		// 결과 확인
-		resultText := e.readChatText()
+		// 응답이 없으면 재시도
+		if resultText == "" {
+			for retry := 0; retry < 3 && e.running; retry++ {
+				time.Sleep(1 * time.Second)
+				resultText = e.waitForResponseRaw(3 * time.Second)
+				if resultText != "" {
+					break
+				}
+			}
+		}
+
+		// 빈 결과 스킵 (가짜 패배 방지)
+		if resultText == "" {
+			fmt.Println("   ⚠️ 배틀 결과를 읽을 수 없음, 스킵")
+			time.Sleep(2 * time.Second)
+			continue
+		}
 
 		// 배틀 횟수 제한 확인 (하루 10회 제한)
 		if DetectBattleLimit(resultText) {
@@ -1221,7 +1275,7 @@ func (e *Engine) loopBattle() {
 			// 승률 업데이트
 			winRate = float64(e.battleWins) / float64(e.battleWins+e.battleLosses) * 100
 
-			fmt.Printf("   → 🏆 승리! +%dG (역배 성공!)\n", goldEarned)
+			fmt.Printf("   → 🏆 승리! +%sG (역배 성공!)\n", FormatGold(goldEarned))
 			overlay.UpdateStatus("⚔️ 자동 배틀\n🏆 승리! +%sG\n\n💰 수익: %sG\n📊 승률: %.1f%% (%d승 %d패)",
 				FormatGold(goldEarned), FormatGold(e.totalGold), winRate, e.battleWins, e.battleLosses)
 		} else {
@@ -1249,20 +1303,17 @@ func (e *Engine) loopBattle() {
 	}
 }
 
-// 이전 텍스트 결과 저장 (응답 대기용)
-var lastChatText string
-
 // ResetLastChatText 마지막 채팅 텍스트 초기화 (새 응답 감지를 위해)
 // 중요한 명령어 전송 전에 호출하여 응답 대기가 제대로 작동하도록 함
 func (e *Engine) ResetLastChatText() {
-	lastChatText = ""
+	e.lastRawChatText = ""
 }
 
 // SaveLastChatText 현재 채팅 텍스트를 저장 (새 응답만 감지하기 위해)
 // 다른 유저 프로필 조회 등에서 명령어 전송 전에 호출
 // ResetLastChatText와 달리 현재 채팅을 저장하여 새 응답만 추출 가능
 func (e *Engine) SaveLastChatText() {
-	lastChatText = e.readChatTextRaw()
+	e.lastRawChatText = e.readChatTextRaw()
 }
 
 // readChatText 화면에서 텍스트 읽기 (클립보드 방식)
@@ -1304,97 +1355,39 @@ func (e *Engine) readChatClipboard() string {
 
 
 // readChatTextWaitForChange 응답이 올 때까지 대기하며 텍스트 읽기
-// 이전 결과와 다를 때까지 최대 maxWait 동안 대기
-// 새로운 부분만 반환 (이전 텍스트와 diff)
+// RAW 텍스트로 변경 감지 + 필터된 텍스트도 변경 확인 (이중 체크)
+// 다른 유저 메시지로만 변경된 경우 계속 대기 (내 응답이 올 때까지)
 func (e *Engine) readChatTextWaitForChange(maxWait time.Duration) string {
 	startTime := time.Now()
-	pollInterval := 300 * time.Millisecond
+	pollInterval := 500 * time.Millisecond
+	initialWait := 1 * time.Second // 봇 응답 대기 (명령어가 채팅에 반영된 후 봇이 응답할 시간 확보)
+	lastFiltered := e.filterMyMessages(e.lastRawChatText)
+
+	// 초기 대기: sendCommand 직후 즉시 폴링하면 사용자 명령어만 감지되어
+	// 봇 응답 없이 반환될 수 있음 (stale data 문제)
+	time.Sleep(initialWait)
 
 	for time.Since(startTime) < maxWait {
-		text := e.readChatText()
-		if text == "" {
+		rawText := e.readChatClipboard()
+		if rawText == "" {
 			time.Sleep(pollInterval)
 			continue
 		}
 
-		// 이전 결과와 다르면 (새 응답 도착) 새 부분만 반환
-		if !isSameTextResult(text, lastChatText) {
-			newLines := extractNewChatLines(lastChatText, text)
-			lastChatText = text
-			return newLines
+		if rawText != e.lastRawChatText {
+			e.lastRawChatText = rawText
+			filtered := e.filterMyMessages(rawText)
+			// 내 메시지가 실제로 변경된 경우에만 반환
+			if filtered != lastFiltered {
+				return filtered
+			}
+			// 다른 유저 메시지로 인한 변경 → 계속 대기
 		}
 
-		// 같으면 대기 후 재시도
 		time.Sleep(pollInterval)
 	}
 
-	// 타임아웃 - 마지막으로 읽은 결과에서 새 부분만 반환
-	text := e.readChatText()
-	if text != "" && !isSameTextResult(text, lastChatText) {
-		newLines := extractNewChatLines(lastChatText, text)
-		lastChatText = text
-		return newLines
-	}
 	return ""
-}
-
-// extractNewChatLines 이전 텍스트와 비교하여 새로운 줄만 추출
-// Old: ABCDE, New: ABCDEABFG → 반환: ABFG
-func extractNewChatLines(oldText, newText string) string {
-	if oldText == "" {
-		return newText
-	}
-
-	if oldText == newText {
-		return ""
-	}
-
-	oldLines := strings.Split(oldText, "\n")
-	newLines := strings.Split(newText, "\n")
-
-	// 방법 1: oldLines가 newLines의 앞부분과 일치하는지 확인 (채팅 추가 케이스)
-	matchCount := 0
-	for i := 0; i < len(oldLines) && i < len(newLines); i++ {
-		if strings.TrimSpace(oldLines[i]) == strings.TrimSpace(newLines[i]) {
-			matchCount++
-		} else {
-			break
-		}
-	}
-
-	// 전체 또는 대부분 일치하면 나머지 반환
-	if matchCount == len(oldLines) && matchCount < len(newLines) {
-		return strings.Join(newLines[matchCount:], "\n")
-	}
-
-	// 방법 2: 채팅이 스크롤되어 oldLines의 뒷부분만 newLines 앞에 남은 경우
-	// oldLines의 suffix가 newLines의 prefix와 일치하는지 확인
-	for suffixStart := 1; suffixStart < len(oldLines); suffixStart++ {
-		suffix := oldLines[suffixStart:]
-		if len(suffix) <= len(newLines) && chatLinesMatch(suffix, newLines[:len(suffix)]) {
-			// suffix 이후의 새 내용 반환
-			if len(suffix) < len(newLines) {
-				return strings.Join(newLines[len(suffix):], "\n")
-			}
-			return ""
-		}
-	}
-
-	// 일치하는 부분 없음 - 전체가 새 내용
-	return newText
-}
-
-// chatLinesMatch 두 줄 배열이 동일한지 비교
-func chatLinesMatch(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if strings.TrimSpace(a[i]) != strings.TrimSpace(b[i]) {
-			return false
-		}
-	}
-	return true
 }
 
 // waitForResponse 플레이봇 응답 대기 (최대 maxWait 동안)
@@ -1411,31 +1404,34 @@ func (e *Engine) waitForResponseRaw(maxWait time.Duration) string {
 }
 
 // waitForResponseInternal 응답 대기 내부 구현
+// RAW 텍스트로 변경 감지 + 필터된 텍스트도 변경 확인
+// raw=true면 RAW 변경 즉시 반환, false면 필터 텍스트 변경 시 반환
 func (e *Engine) waitForResponseInternal(maxWait time.Duration, raw bool) string {
 	startTime := time.Now()
 	pollInterval := 500 * time.Millisecond
 	initialWait := 1 * time.Second
+	lastFiltered := e.filterMyMessages(e.lastRawChatText)
 
 	// 최소 대기 (명령어 처리 시간)
 	time.Sleep(initialWait)
 
 	for time.Since(startTime) < maxWait {
-		var text string
-		if raw {
-			text = e.readChatTextRaw()
-		} else {
-			text = e.readChatText()
-		}
-		if text == "" {
+		rawText := e.readChatClipboard()
+		if rawText == "" {
 			time.Sleep(pollInterval)
 			continue
 		}
 
-		// 이전 결과와 다르면 새 부분만 반환
-		if !isSameTextResult(text, lastChatText) {
-			newLines := extractNewChatLines(lastChatText, text)
-			lastChatText = text
-			return newLines
+		if rawText != e.lastRawChatText {
+			e.lastRawChatText = rawText
+			if raw {
+				return rawText
+			}
+			filtered := e.filterMyMessages(rawText)
+			if filtered != lastFiltered {
+				return filtered
+			}
+			// 다른 유저 메시지로 인한 변경 → 계속 대기
 		}
 
 		time.Sleep(pollInterval)
@@ -1491,39 +1487,6 @@ func (e *Engine) filterMyMessages(text string) string {
 	}
 
 	return strings.Join(result, "\n")
-}
-
-// isSameTextResult 텍스트 결과가 동일한지 비교 (diff 기반)
-// 이전 텍스트의 끝부분이 현재 텍스트에 포함되어 있고, 그 뒤에 새 텍스트가 없으면 "같음"
-func isSameTextResult(current, previous string) bool {
-	if previous == "" {
-		return false // 이전 결과 없으면 항상 다른 것으로 처리
-	}
-	if current == "" {
-		return true // 현재 결과가 비어있으면 같은 것으로 처리
-	}
-
-	// 이전 텍스트의 마지막 부분 (비교용 키)
-	// 너무 짧으면 오탐 가능, 너무 길면 못 찾을 수 있음
-	keyLen := 100
-	if len(previous) < keyLen {
-		keyLen = len(previous)
-	}
-	key := previous[len(previous)-keyLen:]
-
-	// 현재 텍스트에서 키가 어디에 있는지 찾기
-	idx := strings.LastIndex(current, key)
-	if idx == -1 {
-		// 키를 못 찾으면 완전히 다른 텍스트 → 새 응답
-		return false
-	}
-
-	// 키 이후에 새로운 텍스트가 있는지 확인
-	afterKey := current[idx+len(key):]
-	newText := strings.TrimSpace(afterKey)
-
-	// 새 텍스트가 없으면 같은 결과 (새 응답 없음)
-	return len(newText) == 0
 }
 
 func (e *Engine) farmUntilSpecial() bool {
@@ -2098,10 +2061,10 @@ func (e *Engine) showMyProfile() {
 	fmt.Println()
 
 	// 채팅 상태 초기화 (로그에 전체 이력 방지)
-	initialText := e.readChatText()
+	initialText := e.readChatClipboard()
 	if initialText != "" {
-		lastChatText = initialText
-		logger.ChatText(initialText)
+		e.lastRawChatText = initialText
+		logger.ChatText(e.filterMyMessages(initialText))
 	}
 
 	// /프로필 명령어 전송

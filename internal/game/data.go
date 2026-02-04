@@ -4,7 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
+)
+
+// 캐시 (매 호출마다 HTTP 요청 방지)
+var (
+	gameDataCache     *GameData
+	gameDataCacheTime time.Time
+	gameDataMu        sync.Mutex
+	gameDataTTL       = 5 * time.Minute
+
+	optimalSellCache     *OptimalSellData
+	optimalSellCacheTime time.Time
+	optimalSellMu        sync.Mutex
+	optimalSellTTL       = 10 * time.Minute
 )
 
 const (
@@ -65,24 +79,42 @@ type OptimalSellData struct {
 }
 
 
-// FetchGameData 서버에서 게임 데이터 가져오기 (매번 최신 데이터 요청)
+// FetchGameData 서버에서 게임 데이터 가져오기 (TTL 캐시 적용)
 func FetchGameData() (*GameData, error) {
+	gameDataMu.Lock()
+	defer gameDataMu.Unlock()
+
+	if gameDataCache != nil && time.Since(gameDataCacheTime) < gameDataTTL {
+		return gameDataCache, nil
+	}
+
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(gameDataEndpoint)
 	if err != nil {
+		if gameDataCache != nil {
+			return gameDataCache, nil // 실패 시 이전 캐시 반환
+		}
 		return nil, fmt.Errorf("서버 연결 실패: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if gameDataCache != nil {
+			return gameDataCache, nil
+		}
 		return nil, fmt.Errorf("서버 오류: %d", resp.StatusCode)
 	}
 
 	var data GameData
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		if gameDataCache != nil {
+			return gameDataCache, nil
+		}
 		return nil, fmt.Errorf("데이터 파싱 실패: %v", err)
 	}
 
+	gameDataCache = &data
+	gameDataCacheTime = time.Now()
 	return &data, nil
 }
 
@@ -261,24 +293,42 @@ func CalcOptimalSellLevel(currentGold int) int {
 	return bestLevel
 }
 
-// FetchOptimalSellData 서버에서 최적 판매 시점 데이터 가져오기 (매번 최신 데이터 요청)
+// FetchOptimalSellData 서버에서 최적 판매 시점 데이터 가져오기 (TTL 캐시 적용)
 func FetchOptimalSellData() (*OptimalSellData, error) {
+	optimalSellMu.Lock()
+	defer optimalSellMu.Unlock()
+
+	if optimalSellCache != nil && time.Since(optimalSellCacheTime) < optimalSellTTL {
+		return optimalSellCache, nil
+	}
+
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(optimalSellEndpoint)
 	if err != nil {
+		if optimalSellCache != nil {
+			return optimalSellCache, nil
+		}
 		return nil, fmt.Errorf("서버 연결 실패: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if optimalSellCache != nil {
+			return optimalSellCache, nil
+		}
 		return nil, fmt.Errorf("서버 오류: %d", resp.StatusCode)
 	}
 
 	var data OptimalSellData
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		if optimalSellCache != nil {
+			return optimalSellCache, nil
+		}
 		return nil, fmt.Errorf("데이터 파싱 실패: %v", err)
 	}
 
+	optimalSellCache = &data
+	optimalSellCacheTime = time.Now()
 	return &data, nil
 }
 
@@ -322,17 +372,8 @@ func GetAllLevelEfficiencies() []LevelEfficiency {
 	return data.LevelEfficiencies
 }
 
-// FormatGold 골드를 읽기 쉽게 포맷
+// FormatGold 골드를 정확한 콤마 표기로 포맷 (예: 184,331,258)
 func FormatGold(gold int) string {
-	if gold >= 100000000 {
-		return formatFloat(float64(gold)/100000000) + "억"
-	}
-	if gold >= 10000 {
-		return formatFloat(float64(gold)/10000) + "만"
-	}
-	if gold >= 1000 {
-		return formatFloat(float64(gold)/1000) + "천"
-	}
 	return formatInt(gold)
 }
 

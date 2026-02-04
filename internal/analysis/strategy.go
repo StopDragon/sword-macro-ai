@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -255,7 +256,7 @@ func FormatStrategy(s *StrategyProfile) string {
 전략: ` + s.Name + `
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📝 ` + s.Description + `
-🎯 목표 레벨: +` + string(rune('0'+s.TargetLevel)) + `
+🎯 목표 레벨: +` + fmt.Sprintf("%d", s.TargetLevel) + `
 💰 판매 기준: +` + formatLevels(s.SellLevels) + `
 ⚔️ 배틀: ` + battleStr + `
 📊 최대 파산 허용: ` + formatPercent(s.MaxRuinProb) + `
@@ -271,12 +272,11 @@ func formatLevels(levels []int) string {
 		if i > 0 {
 			result += ", "
 		}
-		result += string(rune('0' + level/10))
-		result += string(rune('0' + level%10))
+		result += fmt.Sprintf("%d", level)
 	}
 	return result
 }
 
 func formatPercent(ratio float64) string {
-	return string(rune('0'+int(ratio*100)/10)) + string(rune('0'+int(ratio*100)%10)) + "%"
+	return fmt.Sprintf("%.0f%%", ratio*100)
 }

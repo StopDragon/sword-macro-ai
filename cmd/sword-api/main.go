@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -10,7 +11,11 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
+
+var db *sql.DB
 
 const (
 	defaultAppSecret = "sw0rd-m4cr0-2026-s3cr3t-k3y" // 환경변수 없을 때 기본값
@@ -500,6 +505,11 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	stats.mu.Unlock()
+
+	// SQLite에 영구 저장
+	if db != nil {
+		go saveToDB()
+	}
 
 	log.Printf("[텔레메트리] 세션=%s 버전=%s OS=%s", payload.SessionID[:8], payload.AppVersion, payload.OSType)
 
@@ -1061,7 +1071,292 @@ func validateStatValues(s *TelemetryStats) error {
 	return nil
 }
 
+// ========================
+// SQLite 영구 저장소
+// ========================
+
+func initDB() error {
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "./sword-stats.db"
+	}
+
+	var err error
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		return fmt.Errorf("DB 열기 실패: %v", err)
+	}
+
+	// WAL 모드 (동시 읽기/쓰기 성능 향상)
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		return fmt.Errorf("WAL 설정 실패: %v", err)
+	}
+
+	// 테이블 생성
+	tables := []string{
+		`CREATE TABLE IF NOT EXISTS global_stats (
+			id INTEGER PRIMARY KEY DEFAULT 1,
+			enhance_attempts INTEGER DEFAULT 0,
+			enhance_success INTEGER DEFAULT 0,
+			enhance_fail INTEGER DEFAULT 0,
+			enhance_destroy INTEGER DEFAULT 0,
+			battle_count INTEGER DEFAULT 0,
+			battle_wins INTEGER DEFAULT 0,
+			upset_attempts INTEGER DEFAULT 0,
+			upset_wins INTEGER DEFAULT 0,
+			battle_gold INTEGER DEFAULT 0,
+			farming_attempts INTEGER DEFAULT 0,
+			special_found INTEGER DEFAULT 0,
+			sales_count INTEGER DEFAULT 0,
+			sales_total_gold INTEGER DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS enhance_by_level (
+			level INTEGER PRIMARY KEY,
+			count INTEGER DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS sword_battle_stats (
+			name TEXT PRIMARY KEY,
+			battle_count INTEGER DEFAULT 0,
+			battle_wins INTEGER DEFAULT 0,
+			upset_attempts INTEGER DEFAULT 0,
+			upset_wins INTEGER DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS special_found_by_name (
+			name TEXT PRIMARY KEY,
+			count INTEGER DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS upset_stats_by_diff (
+			level_diff INTEGER PRIMARY KEY,
+			attempts INTEGER DEFAULT 0,
+			wins INTEGER DEFAULT 0,
+			gold_earned INTEGER DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS sword_sale_stats (
+			key TEXT PRIMARY KEY,
+			total_price INTEGER DEFAULT 0,
+			count INTEGER DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS sword_enhance_stats (
+			name TEXT PRIMARY KEY,
+			attempts INTEGER DEFAULT 0,
+			success INTEGER DEFAULT 0,
+			fail INTEGER DEFAULT 0,
+			destroy INTEGER DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS item_farming_stats (
+			name TEXT PRIMARY KEY,
+			total_count INTEGER DEFAULT 0,
+			special_count INTEGER DEFAULT 0,
+			normal_count INTEGER DEFAULT 0
+		)`,
+	}
+
+	for _, ddl := range tables {
+		if _, err := db.Exec(ddl); err != nil {
+			return fmt.Errorf("테이블 생성 실패: %v", err)
+		}
+	}
+
+	// global_stats 초기 행 (없으면 생성)
+	db.Exec("INSERT OR IGNORE INTO global_stats (id) VALUES (1)")
+
+	log.Printf("📦 SQLite DB 초기화 완료: %s", dbPath)
+	return nil
+}
+
+func loadFromDB() error {
+	stats.mu.Lock()
+	defer stats.mu.Unlock()
+
+	// global_stats 로드
+	row := db.QueryRow("SELECT enhance_attempts, enhance_success, enhance_fail, enhance_destroy, battle_count, battle_wins, upset_attempts, upset_wins, battle_gold, farming_attempts, special_found, sales_count, sales_total_gold FROM global_stats WHERE id=1")
+	if err := row.Scan(
+		&stats.enhanceAttempts, &stats.enhanceSuccess, &stats.enhanceFail, &stats.enhanceDestroy,
+		&stats.battleCount, &stats.battleWins, &stats.upsetAttempts, &stats.upsetWins, &stats.battleGold,
+		&stats.farmingAttempts, &stats.specialFound, &stats.salesCount, &stats.salesTotalGold,
+	); err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("global_stats 로드 실패: %v", err)
+	}
+
+	// enhance_by_level 로드
+	rows, err := db.Query("SELECT level, count FROM enhance_by_level")
+	if err != nil {
+		return fmt.Errorf("enhance_by_level 로드 실패: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var level, count int
+		if err := rows.Scan(&level, &count); err == nil {
+			stats.enhanceByLevel[level] = count
+		}
+	}
+
+	// sword_battle_stats 로드
+	rows, err = db.Query("SELECT name, battle_count, battle_wins, upset_attempts, upset_wins FROM sword_battle_stats")
+	if err != nil {
+		return fmt.Errorf("sword_battle_stats 로드 실패: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		s := &SwordBattleStat{}
+		if err := rows.Scan(&name, &s.BattleCount, &s.BattleWins, &s.UpsetAttempts, &s.UpsetWins); err == nil {
+			stats.swordBattleStats[name] = s
+		}
+	}
+
+	// special_found_by_name 로드
+	rows, err = db.Query("SELECT name, count FROM special_found_by_name")
+	if err != nil {
+		return fmt.Errorf("special_found_by_name 로드 실패: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var count int
+		if err := rows.Scan(&name, &count); err == nil {
+			stats.specialFoundByName[name] = count
+		}
+	}
+
+	// upset_stats_by_diff 로드
+	rows, err = db.Query("SELECT level_diff, attempts, wins, gold_earned FROM upset_stats_by_diff")
+	if err != nil {
+		return fmt.Errorf("upset_stats_by_diff 로드 실패: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var diff int
+		s := &UpsetStat{}
+		if err := rows.Scan(&diff, &s.Attempts, &s.Wins, &s.GoldEarned); err == nil {
+			stats.upsetStatsByDiff[diff] = s
+		}
+	}
+
+	// sword_sale_stats 로드
+	rows, err = db.Query("SELECT key, total_price, count FROM sword_sale_stats")
+	if err != nil {
+		return fmt.Errorf("sword_sale_stats 로드 실패: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		s := &SwordSaleStat{}
+		if err := rows.Scan(&key, &s.TotalPrice, &s.Count); err == nil {
+			stats.swordSaleStats[key] = s
+		}
+	}
+
+	// sword_enhance_stats 로드
+	rows, err = db.Query("SELECT name, attempts, success, fail, destroy FROM sword_enhance_stats")
+	if err != nil {
+		return fmt.Errorf("sword_enhance_stats 로드 실패: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		s := &SwordEnhanceStat{}
+		if err := rows.Scan(&name, &s.Attempts, &s.Success, &s.Fail, &s.Destroy); err == nil {
+			stats.swordEnhanceStats[name] = s
+		}
+	}
+
+	// item_farming_stats 로드
+	rows, err = db.Query("SELECT name, total_count, special_count, normal_count FROM item_farming_stats")
+	if err != nil {
+		return fmt.Errorf("item_farming_stats 로드 실패: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		s := &ItemFarmingStat{}
+		if err := rows.Scan(&name, &s.TotalCount, &s.SpecialCount, &s.NormalCount); err == nil {
+			stats.itemFarmingStats[name] = s
+		}
+	}
+
+	log.Printf("📦 DB에서 통계 로드 완료")
+	return nil
+}
+
+func saveToDB() {
+	stats.mu.RLock()
+	defer stats.mu.RUnlock()
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("[DB] 트랜잭션 시작 실패: %v", err)
+		return
+	}
+	defer tx.Rollback()
+
+	// global_stats 저장
+	tx.Exec(`UPDATE global_stats SET
+		enhance_attempts=?, enhance_success=?, enhance_fail=?, enhance_destroy=?,
+		battle_count=?, battle_wins=?, upset_attempts=?, upset_wins=?, battle_gold=?,
+		farming_attempts=?, special_found=?, sales_count=?, sales_total_gold=?
+		WHERE id=1`,
+		stats.enhanceAttempts, stats.enhanceSuccess, stats.enhanceFail, stats.enhanceDestroy,
+		stats.battleCount, stats.battleWins, stats.upsetAttempts, stats.upsetWins, stats.battleGold,
+		stats.farmingAttempts, stats.specialFound, stats.salesCount, stats.salesTotalGold,
+	)
+
+	// enhance_by_level 저장
+	for level, count := range stats.enhanceByLevel {
+		tx.Exec("INSERT OR REPLACE INTO enhance_by_level (level, count) VALUES (?, ?)", level, count)
+	}
+
+	// sword_battle_stats 저장
+	for name, s := range stats.swordBattleStats {
+		tx.Exec("INSERT OR REPLACE INTO sword_battle_stats (name, battle_count, battle_wins, upset_attempts, upset_wins) VALUES (?, ?, ?, ?, ?)",
+			name, s.BattleCount, s.BattleWins, s.UpsetAttempts, s.UpsetWins)
+	}
+
+	// special_found_by_name 저장
+	for name, count := range stats.specialFoundByName {
+		tx.Exec("INSERT OR REPLACE INTO special_found_by_name (name, count) VALUES (?, ?)", name, count)
+	}
+
+	// upset_stats_by_diff 저장
+	for diff, s := range stats.upsetStatsByDiff {
+		tx.Exec("INSERT OR REPLACE INTO upset_stats_by_diff (level_diff, attempts, wins, gold_earned) VALUES (?, ?, ?, ?)",
+			diff, s.Attempts, s.Wins, s.GoldEarned)
+	}
+
+	// sword_sale_stats 저장
+	for key, s := range stats.swordSaleStats {
+		tx.Exec("INSERT OR REPLACE INTO sword_sale_stats (key, total_price, count) VALUES (?, ?, ?)",
+			key, s.TotalPrice, s.Count)
+	}
+
+	// sword_enhance_stats 저장
+	for name, s := range stats.swordEnhanceStats {
+		tx.Exec("INSERT OR REPLACE INTO sword_enhance_stats (name, attempts, success, fail, destroy) VALUES (?, ?, ?, ?, ?)",
+			name, s.Attempts, s.Success, s.Fail, s.Destroy)
+	}
+
+	// item_farming_stats 저장
+	for name, s := range stats.itemFarmingStats {
+		tx.Exec("INSERT OR REPLACE INTO item_farming_stats (name, total_count, special_count, normal_count) VALUES (?, ?, ?, ?)",
+			name, s.TotalCount, s.SpecialCount, s.NormalCount)
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("[DB] 커밋 실패: %v", err)
+	}
+}
+
 func main() {
+	// SQLite 초기화
+	if err := initDB(); err != nil {
+		log.Printf("⚠️ DB 초기화 실패 (인메모리 모드로 동작): %v", err)
+	} else {
+		defer db.Close()
+		if err := loadFromDB(); err != nil {
+			log.Printf("⚠️ DB 로드 실패: %v", err)
+		}
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

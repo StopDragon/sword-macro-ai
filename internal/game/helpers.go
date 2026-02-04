@@ -116,7 +116,7 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 		text := e.readChatTextWaitForChange(5 * time.Second)
 		state := ParseOCRText(text)
 
-		for retry := 0; retry < 3 && state.LastResult == "" && e.running; retry++ {
+		for retry := 0; retry < 3 && state != nil && state.LastResult == "" && e.running; retry++ {
 			time.Sleep(1 * time.Second)
 			text = e.readChatTextWaitForChange(3 * time.Second)
 			state = ParseOCRText(text)

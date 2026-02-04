@@ -65,11 +65,12 @@ var (
 	destroyPattern = regexp.MustCompile(`(?:파괴|부서|사라)`)
 	// 강화 레벨 변경 패턴: "+0 → +1" 또는 "+0 -> +1" 에서 결과 레벨 추출
 	enhanceLevelPattern = regexp.MustCompile(`\+(\d+)\s*[→\->]+\s*\+(\d+)`)
-	// 아이템 판별 로직 (v3):
-	// - "낡은 X" → 쓰레기
-	// - 몽둥이, 망치, 검, 칼 (일반 무기) → 일반
-	// - 그 외 전부 → 특수 (칫솔, 우산, 단소, 젓가락, 광선검, 하드, 슬리퍼 등)
-	normalWeaponPattern = regexp.MustCompile(`(?:몽둥이|망치|검|칼)$`)
+	// 아이템 판별 로직 (v4):
+	// 1. 특수 아이템 패턴 먼저 체크 (광선검 등 일반 무기 접미사를 포함하는 특수 아이템)
+	// 2. 일반 무기 패턴 체크 (몽둥이, 망치, 검, 칼, 도끼)
+	// 3. 그 외 전부 → 특수
+	specialWeaponPattern = regexp.MustCompile(`(?:칫솔|우산|단소|젓가락|광선검|하드|슬리퍼|기타|오페라|아리아|막대)$`)
+	normalWeaponPattern  = regexp.MustCompile(`(?:몽둥이|망치|검|칼|도끼)$`)
 	trashPattern        = regexp.MustCompile(`(?:낡은|일반|노말|커먼|쓰레기)`)
 	farmPattern    = regexp.MustCompile(`(?:획득|얻었|드랍|뽑기)`)
 
@@ -119,6 +120,11 @@ var (
 	// 배틀 횟수 제한 패턴 (하루 10회 제한 도달 시)
 	// 〖🚫 배틀 횟수 제한〗 또는 "오늘은 이미 10번의 배틀"
 	battleLimitPattern = regexp.MustCompile(`(?:배틀\s*횟수\s*제한|오늘.*10번.*배틀|오늘\s*배틀.*모두\s*사용)`)
+
+	// 함수 내부에서 사용하는 정규식 (매번 컴파일 방지)
+	acquiredSwordLevelPattern = regexp.MustCompile(`획득\s*검:\s*\[\+?(\d+)\]`)
+	negativeGoldPattern       = regexp.MustCompile(`-\d{1,3}(?:,\d{3})*\s*G`)
+	levelPrefixPattern        = regexp.MustCompile(`\[\+?\d+\]\s*`)
 )
 
 // ParseOCRText OCR 텍스트 파싱 (범위 검증 포함)
@@ -139,21 +145,28 @@ func ParseOCRText(text string) *GameState {
 	state.ItemName = ExtractItemName(text)
 
 	// 아이템 판별 로직 (v3):
-	// 1. "낡은" 포함 → 쓰레기
+	// 아이템 이름 기반으로 판별 (전체 텍스트가 아닌 추출된 이름만 검사)
+	// 1. 이름에 "낡은" 포함 → 쓰레기
 	// 2. 몽둥이/망치/검/칼로 끝남 → 일반
 	// 3. 그 외 → 특수
-	if trashPattern.MatchString(textLower) {
-		state.ItemType = "trash"
-	} else if state.ItemName != "" {
-		state.ItemType = DetermineItemType(state.ItemName)
+	if state.ItemName != "" {
+		if trashPattern.MatchString(strings.ToLower(state.ItemName)) {
+			state.ItemType = "trash"
+		} else {
+			state.ItemType = DetermineItemType(state.ItemName)
+		}
 	}
 
-	// 골드 파싱: "남은 골드" 패턴 우선 (전체 텍스트에서)
-	if matches := remainingGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
-		goldStr := strings.ReplaceAll(matches[1], ",", "")
-		if gold, err := strconv.Atoi(goldStr); err == nil {
-			if ValidateGold(gold) {
-				state.Gold = gold
+	// 골드 파싱: "남은 골드" 패턴 우선 (전체 텍스트에서, 마지막 매칭)
+	allGoldMatches := remainingGoldPattern.FindAllStringSubmatch(text, -1)
+	if len(allGoldMatches) > 0 {
+		matches := allGoldMatches[len(allGoldMatches)-1]
+		if len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			if gold, err := strconv.Atoi(goldStr); err == nil {
+				if ValidateGold(gold) {
+					state.Gold = gold
+				}
 			}
 		}
 	}
@@ -253,18 +266,15 @@ func DetectEnhanceResult(text string) string {
 }
 
 // DetectItemType 아이템 타입 감지 (텍스트에서)
-// v3 로직: 아이템 이름 추출 후 DetermineItemType으로 판별
+// v3 로직: 아이템 이름 추출 후 이름 기반으로 판별
 func DetectItemType(text string) string {
-	textLower := strings.ToLower(text)
-
-	// 1. "낡은" 포함 → 쓰레기
-	if trashPattern.MatchString(textLower) {
-		return "trash"
-	}
-
-	// 2. 아이템 이름 추출 후 타입 결정 (특수 vs 일반)
+	// 아이템 이름 추출 (마지막 매칭 = 최신 아이템)
 	itemName := ExtractItemName(text)
 	if itemName != "" {
+		// 이름에 "낡은" 포함 → 쓰레기
+		if trashPattern.MatchString(strings.ToLower(itemName)) {
+			return "trash"
+		}
 		return DetermineItemType(itemName)
 	}
 
@@ -299,19 +309,27 @@ func DetectInsufficientGold(text string) *InsufficientGoldInfo {
 
 	info.IsInsufficient = true
 
-	// 필요 골드 추출
-	if matches := requiredGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
-		goldStr := strings.ReplaceAll(matches[1], ",", "")
-		if gold, err := strconv.Atoi(goldStr); err == nil {
-			info.RequiredGold = gold
+	// 필요 골드 추출 (마지막 매칭)
+	allReq := requiredGoldPattern.FindAllStringSubmatch(text, -1)
+	if len(allReq) > 0 {
+		matches := allReq[len(allReq)-1]
+		if len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			if gold, err := strconv.Atoi(goldStr); err == nil {
+				info.RequiredGold = gold
+			}
 		}
 	}
 
-	// 남은 골드 추출
-	if matches := remainingGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
-		goldStr := strings.ReplaceAll(matches[1], ",", "")
-		if gold, err := strconv.Atoi(goldStr); err == nil {
-			info.RemainingGold = gold
+	// 남은 골드 추출 (마지막 매칭)
+	allRem := remainingGoldPattern.FindAllStringSubmatch(text, -1)
+	if len(allRem) > 0 {
+		matches := allRem[len(allRem)-1]
+		if len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			if gold, err := strconv.Atoi(goldStr); err == nil {
+				info.RemainingGold = gold
+			}
 		}
 	}
 
@@ -325,11 +343,15 @@ func GotNewSword(text string) bool {
 
 // ExtractSaleGold 판매 수익 추출 ("획득 골드: +9G" → 9)
 func ExtractSaleGold(text string) int {
-	if matches := saleGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
-		goldStr := strings.ReplaceAll(matches[1], ",", "")
-		if gold, err := strconv.Atoi(goldStr); err == nil {
-			if gold >= 0 && gold <= MaxGold {
-				return gold
+	allMatches := saleGoldPattern.FindAllStringSubmatch(text, -1)
+	if len(allMatches) > 0 {
+		matches := allMatches[len(allMatches)-1]
+		if len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			if gold, err := strconv.Atoi(goldStr); err == nil {
+				if gold >= 0 && gold <= MaxGold {
+					return gold
+				}
 			}
 		}
 	}
@@ -338,11 +360,15 @@ func ExtractSaleGold(text string) int {
 
 // ExtractCurrentGold 현재 보유 골드 추출 ("현재 보유 골드: 145,221,260G" → 145221260)
 func ExtractCurrentGold(text string) int {
-	if matches := currentGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
-		goldStr := strings.ReplaceAll(matches[1], ",", "")
-		if gold, err := strconv.Atoi(goldStr); err == nil {
-			if gold >= MinGold && gold <= MaxGold {
-				return gold
+	allMatches := currentGoldPattern.FindAllStringSubmatch(text, -1)
+	if len(allMatches) > 0 {
+		matches := allMatches[len(allMatches)-1]
+		if len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			if gold, err := strconv.Atoi(goldStr); err == nil {
+				if gold >= MinGold && gold <= MaxGold {
+					return gold
+				}
 			}
 		}
 	}
@@ -369,10 +395,14 @@ func ExtractSaleResult(text string) *SaleResult {
 		NewSwordLvl:  -1,
 	}
 
-	// 새 검 획득 정보 추출
-	if match := newSwordAcquirePattern.FindStringSubmatch(text); len(match) >= 3 {
-		result.NewSwordLvl, _ = strconv.Atoi(match[1])
-		result.NewSwordName = strings.TrimSpace(match[2])
+	// 새 검 획득 정보 추출 (마지막 매칭)
+	allSword := newSwordAcquirePattern.FindAllStringSubmatch(text, -1)
+	if len(allSword) > 0 {
+		match := allSword[len(allSword)-1]
+		if len(match) >= 3 {
+			result.NewSwordLvl, _ = strconv.Atoi(match[1])
+			result.NewSwordName = strings.TrimSpace(match[2])
+		}
 	}
 
 	// 둘 다 -1이면 nil 반환
@@ -385,22 +415,31 @@ func ExtractSaleResult(text string) *SaleResult {
 // ExtractDestroyNewSword 파괴 시 지급된 새 검 정보 추출
 // 형식: "『[+0] 낡은 검』 지급되었습니다" → (name="낡은 검", level=0, found=true)
 func ExtractDestroyNewSword(text string) (string, int, bool) {
-	if match := destroySwordNamePattern.FindStringSubmatch(text); len(match) >= 3 {
-		level, _ := strconv.Atoi(match[1])
-		name := strings.TrimSpace(match[2])
-		return name, level, true
+	allDestroy := destroySwordNamePattern.FindAllStringSubmatch(text, -1)
+	if len(allDestroy) > 0 {
+		match := allDestroy[len(allDestroy)-1]
+		if len(match) >= 3 {
+			level, _ := strconv.Atoi(match[1])
+			name := strings.TrimSpace(match[2])
+			return name, level, true
+		}
 	}
 	return "", 0, false
 }
 
-// DetermineItemType 아이템 이름으로 타입 결정 (v3 로직)
-// - 몽둥이, 망치, 검, 칼로 끝나면 → "normal" (일반)
-// - 그 외 전부 → "special" (특수: 칫솔, 우산, 단소, 젓가락, 광선검, 슬리퍼 등)
+// DetermineItemType 아이템 이름으로 타입 결정 (v4 로직)
+// 1. 특수 아이템 패턴 먼저 체크 (광선검 등 일반 접미사 포함하는 특수 아이템)
+// 2. 일반 무기 패턴 체크 (몽둥이, 망치, 검, 칼, 도끼)
+// 3. 그 외 전부 → "special"
 func DetermineItemType(itemName string) string {
 	if itemName == "" {
 		return "unknown"
 	}
-	// 일반 무기 패턴: 몽둥이, 망치, 검, 칼로 끝나는 것
+	// 1순위: 특수 아이템 패턴 (광선검처럼 일반 무기 접미사를 포함하는 특수 아이템)
+	if specialWeaponPattern.MatchString(itemName) {
+		return "special"
+	}
+	// 2순위: 일반 무기 패턴 (몽둥이, 망치, 검, 칼, 도끼)
 	if normalWeaponPattern.MatchString(itemName) {
 		return "normal"
 	}
@@ -424,11 +463,15 @@ func GetItemTypeLabel(itemType string) string {
 
 // ExtractLevel 레벨 추출 (범위 검증 포함)
 func ExtractLevel(text string) int {
-	if matches := levelPattern.FindStringSubmatch(text); len(matches) > 1 {
-		if level, err := strconv.Atoi(matches[1]); err == nil {
-			// 범위 검증
-			if level >= MinLevel && level <= MaxLevel {
-				return level
+	allLevel := levelPattern.FindAllStringSubmatch(text, -1)
+	if len(allLevel) > 0 {
+		matches := allLevel[len(allLevel)-1]
+		if len(matches) > 1 {
+			if level, err := strconv.Atoi(matches[1]); err == nil {
+				// 범위 검증
+				if level >= MinLevel && level <= MaxLevel {
+					return level
+				}
 			}
 		}
 	}
@@ -453,8 +496,7 @@ func ExtractEnhanceResultLevel(text string) int {
 	}
 
 	// 2순위: "획득 검: [+N]" 패턴에서 레벨 추출 (마지막 매칭)
-	swordPattern := regexp.MustCompile(`획득\s*검:\s*\[\+?(\d+)\]`)
-	allSwordMatches := swordPattern.FindAllStringSubmatch(text, -1)
+	allSwordMatches := acquiredSwordLevelPattern.FindAllStringSubmatch(text, -1)
 	if len(allSwordMatches) > 0 {
 		matches := allSwordMatches[len(allSwordMatches)-1]
 		if len(matches) > 1 {
@@ -475,22 +517,30 @@ func ExtractEnhanceResultLevel(text string) int {
 func ExtractGold(text string) int {
 	textLower := strings.ToLower(text)
 
-	// "남은 골드" 패턴 우선 확인
-	if matches := remainingGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
-		goldStr := strings.ReplaceAll(matches[1], ",", "")
-		if gold, err := strconv.Atoi(goldStr); err == nil {
-			if gold >= MinGold && gold <= MaxGold {
-				return gold
+	// "남은 골드" 패턴 우선 확인 (마지막 매칭)
+	allRemGold := remainingGoldPattern.FindAllStringSubmatch(text, -1)
+	if len(allRemGold) > 0 {
+		matches := allRemGold[len(allRemGold)-1]
+		if len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			if gold, err := strconv.Atoi(goldStr); err == nil {
+				if gold >= MinGold && gold <= MaxGold {
+					return gold
+				}
 			}
 		}
 	}
 
-	// "보유 골드" 패턴 확인
-	if matches := profileGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
-		goldStr := strings.ReplaceAll(matches[1], ",", "")
-		if gold, err := strconv.Atoi(goldStr); err == nil {
-			if gold >= MinGold && gold <= MaxGold {
-				return gold
+	// "보유 골드" 패턴 확인 (마지막 매칭)
+	allProfGold := profileGoldPattern.FindAllStringSubmatch(text, -1)
+	if len(allProfGold) > 0 {
+		matches := allProfGold[len(allProfGold)-1]
+		if len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			if gold, err := strconv.Atoi(goldStr); err == nil {
+				if gold >= MinGold && gold <= MaxGold {
+					return gold
+				}
 			}
 		}
 	}
@@ -506,17 +556,20 @@ func ExtractGold(text string) int {
 	}
 	// 3. 음수 패턴 "-숫자G"
 	if strings.Contains(text, "-") && strings.Contains(textLower, "골드") {
-		negativeGoldPattern := regexp.MustCompile(`-\d{1,3}(?:,\d{3})*\s*G`)
 		if negativeGoldPattern.MatchString(text) {
 			return -1
 		}
 	}
 
-	if matches := goldPattern.FindStringSubmatch(text); len(matches) > 1 {
-		goldStr := strings.ReplaceAll(matches[1], ",", "")
-		if gold, err := strconv.Atoi(goldStr); err == nil {
-			if gold >= MinGold && gold <= MaxGold {
-				return gold
+	allGoldP := goldPattern.FindAllStringSubmatch(text, -1)
+	if len(allGoldP) > 0 {
+		matches := allGoldP[len(allGoldP)-1]
+		if len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			if gold, err := strconv.Atoi(goldStr); err == nil {
+				if gold >= MinGold && gold <= MaxGold {
+					return gold
+				}
 			}
 		}
 	}
@@ -602,20 +655,32 @@ func ParseProfile(text string) *Profile {
 		BestLevel: -1,
 	}
 
-	// 이름 추출
-	if matches := profileNamePattern.FindStringSubmatch(text); len(matches) > 1 {
-		profile.Name = matches[1]
-	}
-
-	// 전적 추출
-	if matches := profileWinsPattern.FindStringSubmatch(text); len(matches) > 1 {
-		if wins, err := strconv.Atoi(matches[1]); err == nil {
-			profile.Wins = wins
+	// 이름 추출 - 마지막 매칭 사용 (채팅에 여러 프로필 있을 수 있음)
+	allNameMatches := profileNamePattern.FindAllStringSubmatch(text, -1)
+	if len(allNameMatches) > 0 {
+		matches := allNameMatches[len(allNameMatches)-1]
+		if len(matches) > 1 {
+			profile.Name = matches[1]
 		}
 	}
-	if matches := profileLossesPattern.FindStringSubmatch(text); len(matches) > 1 {
-		if losses, err := strconv.Atoi(matches[1]); err == nil {
-			profile.Losses = losses
+
+	// 전적 추출 - 마지막 매칭 사용
+	allWinsMatches := profileWinsPattern.FindAllStringSubmatch(text, -1)
+	if len(allWinsMatches) > 0 {
+		matches := allWinsMatches[len(allWinsMatches)-1]
+		if len(matches) > 1 {
+			if wins, err := strconv.Atoi(matches[1]); err == nil {
+				profile.Wins = wins
+			}
+		}
+	}
+	allLossesMatches := profileLossesPattern.FindAllStringSubmatch(text, -1)
+	if len(allLossesMatches) > 0 {
+		matches := allLossesMatches[len(allLossesMatches)-1]
+		if len(matches) > 1 {
+			if losses, err := strconv.Atoi(matches[1]); err == nil {
+				profile.Losses = losses
+			}
 		}
 	}
 
@@ -718,30 +783,38 @@ func ParseBattleResult(text string, myName string) *BattleResult {
 		GoldEarned:  0,
 	}
 
-	// 승자 추출
-	if matches := battleResultPattern.FindStringSubmatch(text); len(matches) > 1 {
-		result.Winner = matches[1]
-		result.Won = (result.Winner == myName)
-	}
-
-	// 획득 골드 추출
-	if matches := battleGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
-		goldStr := strings.ReplaceAll(matches[1], ",", "")
-		if gold, err := strconv.Atoi(goldStr); err == nil {
-			result.GoldEarned = gold
+	// 승자 추출 (마지막 매칭)
+	allResult := battleResultPattern.FindAllStringSubmatch(text, -1)
+	if len(allResult) > 0 {
+		matches := allResult[len(allResult)-1]
+		if len(matches) > 1 {
+			result.Winner = matches[1]
+			result.Won = (result.Winner == myName)
 		}
 	}
 
-	// VS 패턴에서 양측 정보 추출
-	vsMatches := battleVsPattern.FindAllStringSubmatch(text, 2)
-	if len(vsMatches) >= 2 {
-		// 첫 번째 참가자
-		user1 := vsMatches[0][1]
-		level1 := ExtractLevel(vsMatches[0][2])
+	// 획득 골드 추출 (마지막 매칭)
+	allGold := battleGoldPattern.FindAllStringSubmatch(text, -1)
+	if len(allGold) > 0 {
+		matches := allGold[len(allGold)-1]
+		if len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			if gold, err := strconv.Atoi(goldStr); err == nil {
+				result.GoldEarned = gold
+			}
+		}
+	}
+
+	// VS 패턴에서 양측 정보 추출 (마지막 2개 매칭 = 최신 배틀)
+	allVs := battleVsPattern.FindAllStringSubmatch(text, -1)
+	if len(allVs) >= 2 {
+		// 마지막 2개에서 참가자 추출
+		user1 := allVs[len(allVs)-2][1]
+		level1 := ExtractLevel(allVs[len(allVs)-2][2])
 
 		// 두 번째 참가자
-		user2 := vsMatches[1][1]
-		level2 := ExtractLevel(vsMatches[1][2])
+		user2 := allVs[len(allVs)-1][1]
+		level2 := ExtractLevel(allVs[len(allVs)-1][2])
 
 		if result.Winner == user1 {
 			result.WinnerLevel = level1
@@ -800,8 +873,12 @@ func ExtractUsernamesFromRanking(entries []RankingEntry) []string {
 // ExtractSpecialName 특수 아이템 이름 추출
 // 예: "특수 아이템 『용검』 획득!" -> "용검"
 func ExtractSpecialName(text string) string {
-	if matches := specialNamePattern.FindStringSubmatch(text); len(matches) > 1 {
-		return strings.TrimSpace(matches[1])
+	allMatches := specialNamePattern.FindAllStringSubmatch(text, -1)
+	if len(allMatches) > 0 {
+		matches := allMatches[len(allMatches)-1]
+		if len(matches) > 1 {
+			return strings.TrimSpace(matches[1])
+		}
 	}
 	return ""
 }
@@ -810,21 +887,28 @@ func ExtractSpecialName(text string) string {
 // 예: "[+10] 불꽃검" -> "불꽃검"
 // 예: "『[+10] 불꽃검』" -> "불꽃검"
 func ExtractSwordName(text string) string {
-	// 먼저 레벨 패턴 [+10] 을 찾고 그 뒤의 텍스트를 추출
-	if matches := swordNamePattern.FindStringSubmatch(text); len(matches) > 2 {
-		name := strings.TrimSpace(matches[2])
-		if name != "" {
-			return name
+	// 먼저 레벨 패턴 [+10] 을 찾고 그 뒤의 텍스트를 추출 (마지막 매칭)
+	allMatches := swordNamePattern.FindAllStringSubmatch(text, -1)
+	if len(allMatches) > 0 {
+		matches := allMatches[len(allMatches)-1]
+		if len(matches) > 2 {
+			name := strings.TrimSpace(matches[2])
+			if name != "" {
+				return name
+			}
 		}
 	}
 
-	// 대안: 『』 괄호 안에서 검 이름 추출
-	bracketPattern := regexp.MustCompile(`『([^』]+)』`)
-	if matches := bracketPattern.FindStringSubmatch(text); len(matches) > 1 {
-		innerText := matches[1]
-		// [+N] 패턴 제거하고 검 이름만 추출
-		swordOnly := regexp.MustCompile(`\[\+?\d+\]\s*`).ReplaceAllString(innerText, "")
-		return strings.TrimSpace(swordOnly)
+	// 대안: 『』 괄호 안에서 검 이름 추출 (마지막 매칭)
+	allBracket := bracketItemPattern.FindAllStringSubmatch(text, -1)
+	if len(allBracket) > 0 {
+		matches := allBracket[len(allBracket)-1]
+		if len(matches) > 1 {
+			innerText := matches[1]
+			// [+N] 패턴 제거하고 검 이름만 추출
+			swordOnly := levelPrefixPattern.ReplaceAllString(innerText, "")
+			return strings.TrimSpace(swordOnly)
+		}
 	}
 
 	return ""
@@ -844,40 +928,59 @@ func ExtractSwordInfo(text string) (int, string) {
 // 예: "방망이를 얻었습니다" -> "방망이"
 // 예: "특수 아이템 『용검』 발견!" -> "용검"
 func ExtractItemName(text string) string {
+	// 마지막 매칭 사용 (채팅에 여러 아이템 정보가 있을 수 있음)
+	// ParseProfile, ExtractEnhanceResultLevel과 동일한 패턴
+
 	// 1순위: 특수 아이템 패턴 (히든/특수 키워드 포함)
-	if matches := specialNamePattern.FindStringSubmatch(text); len(matches) > 1 {
-		return strings.TrimSpace(matches[1])
+	allSpecial := specialNamePattern.FindAllStringSubmatch(text, -1)
+	if len(allSpecial) > 0 {
+		matches := allSpecial[len(allSpecial)-1]
+		if len(matches) > 1 {
+			return strings.TrimSpace(matches[1])
+		}
 	}
 
 	// 2순위: 게임 출력 형식 "⚔️획득 검: [+N] 아이템이름" 또는 "[+N] 아이템이름"
-	if matches := acquiredSwordPattern.FindStringSubmatch(text); len(matches) > 2 {
-		name := strings.TrimSpace(matches[2])
-		if name != "" && len(name) < 30 {
-			return name
+	allAcquired := acquiredSwordPattern.FindAllStringSubmatch(text, -1)
+	if len(allAcquired) > 0 {
+		matches := allAcquired[len(allAcquired)-1]
+		if len(matches) > 2 {
+			name := strings.TrimSpace(matches[2])
+			if name != "" && len(name) < 30 {
+				return name
+			}
 		}
 	}
 
 	// 3순위: 『』 괄호 안의 아이템
-	if matches := bracketItemPattern.FindStringSubmatch(text); len(matches) > 1 {
-		innerText := matches[1]
-		// [+N] 패턴이 있으면 제거
-		swordOnly := regexp.MustCompile(`\[\+?\d+\]\s*`).ReplaceAllString(innerText, "")
-		name := strings.TrimSpace(swordOnly)
-		if name != "" {
-			return name
+	allBracket := bracketItemPattern.FindAllStringSubmatch(text, -1)
+	if len(allBracket) > 0 {
+		matches := allBracket[len(allBracket)-1]
+		if len(matches) > 1 {
+			innerText := matches[1]
+			// [+N] 패턴이 있으면 제거
+			swordOnly := levelPrefixPattern.ReplaceAllString(innerText, "")
+			name := strings.TrimSpace(swordOnly)
+			if name != "" {
+				return name
+			}
 		}
 	}
 
 	// 4순위: "XXX 획득/얻/드랍" 패턴
-	if matches := farmItemPattern.FindStringSubmatch(text); len(matches) > 1 {
-		name := strings.TrimSpace(matches[1])
-		// 불필요한 접미사 제거
-		name = strings.TrimSuffix(name, "을")
-		name = strings.TrimSuffix(name, "를")
-		name = strings.TrimSuffix(name, "이")
-		name = strings.TrimSuffix(name, "가")
-		if name != "" && len(name) < 20 { // 너무 긴 문자열 제외
-			return name
+	allFarm := farmItemPattern.FindAllStringSubmatch(text, -1)
+	if len(allFarm) > 0 {
+		matches := allFarm[len(allFarm)-1]
+		if len(matches) > 1 {
+			name := strings.TrimSpace(matches[1])
+			// 불필요한 접미사 제거
+			name = strings.TrimSuffix(name, "을")
+			name = strings.TrimSuffix(name, "를")
+			name = strings.TrimSuffix(name, "이")
+			name = strings.TrimSuffix(name, "가")
+			if name != "" && len(name) < 20 { // 너무 긴 문자열 제외
+				return name
+			}
 		}
 	}
 
@@ -904,13 +1007,15 @@ func ExtractFullItemInfo(text string) *ItemInfo {
 	// 레벨 추출 (있으면)
 	info.Level = ExtractLevel(text)
 
-	// 타입 결정 (v3 로직)
-	// 1. "낡은" 포함 → 쓰레기
+	// 타입 결정: 아이템 이름 기반으로 판별 (전체 텍스트가 아닌 이름만 검사)
+	// 1. 이름에 "낡은" 포함 → 쓰레기
 	// 2. 아이템 이름으로 판별 → DetermineItemType (특수/일반)
-	if trashPattern.MatchString(strings.ToLower(text)) {
-		info.Type = "trash"
-	} else if info.Name != "" {
-		info.Type = DetermineItemType(info.Name)
+	if info.Name != "" {
+		if trashPattern.MatchString(strings.ToLower(info.Name)) {
+			info.Type = "trash"
+		} else {
+			info.Type = DetermineItemType(info.Name)
+		}
 	}
 
 	return info
