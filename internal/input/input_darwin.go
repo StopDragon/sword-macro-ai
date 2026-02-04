@@ -79,7 +79,7 @@ const char* getClipboard() {
         NSPasteboard* pb = [NSPasteboard generalPasteboard];
         NSString* str = [pb stringForType:NSPasteboardTypeString];
         if (str == nil) {
-            return "";
+            return NULL;
         }
         return strdup([str UTF8String]); // caller must free
     }
