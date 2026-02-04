@@ -376,7 +376,10 @@ func ShowControlPanel(x, y int) {
 }
 
 // HideControlPanel 컨트롤 패널 숨기기
-func HideControlPanel() {
+func HideControlPanel() {}
+
+// ShowInfoPanel 단축키 안내 패널 표시
+func ShowInfoPanel(x, y int, text string) {
 	// Windows 구현: 추후 추가 예정
 }
 
@@ -397,6 +400,9 @@ func CheckRestartClicked() bool {
 	// Windows에서는 항상 false 반환 (오버레이 버튼 미구현)
 	return false
 }
+
+// PumpEvents 이벤트 루프 펌핑 (Windows에서는 불필요)
+func PumpEvents() {}
 
 // ClearLog 로그 버퍼 초기화
 func ClearLog() {

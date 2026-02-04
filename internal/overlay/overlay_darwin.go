@@ -205,23 +205,17 @@ void InitApp() {
 
 static ButtonHandler *buttonHandler = nil;
 
-// 컨트롤 패널 표시 (일시정지/재시작/종료 버튼) - 가로 배치
-void ShowControlPanel(int x, int y) {
+// 단축키 안내 패널 표시 (초록 테두리 아래)
+void ShowInfoPanel(int x, int y, const char *text) {
     @autoreleasepool {
         if (controlWindow != nil) {
             [controlWindow close];
             controlWindow = nil;
         }
 
-        if (buttonHandler == nil) {
-            buttonHandler = [[ButtonHandler alloc] init];
-        }
+        int width = 200;
+        int height = 25;
 
-        // 패널 크기 (가로 배치, 버튼 3개)
-        int width = 310;
-        int height = 35;
-
-        // 화면 좌표 변환
         NSRect frame = NSMakeRect(x, [[NSScreen mainScreen] frame].size.height - y - height, width, height);
 
         controlWindow = [[NSWindow alloc]
@@ -231,41 +225,22 @@ void ShowControlPanel(int x, int y) {
             defer:NO];
 
         [controlWindow setLevel:NSScreenSaverWindowLevel];
-        [controlWindow setBackgroundColor:[NSColor colorWithRed:0.2 green:0.2 blue:0.2 alpha:0.95]];
+        [controlWindow setBackgroundColor:[NSColor colorWithRed:0.15 green:0.15 blue:0.15 alpha:0.85]];
         [controlWindow setOpaque:NO];
-        [controlWindow setIgnoresMouseEvents:NO]; // 마우스 이벤트 허용
+        [controlWindow setIgnoresMouseEvents:YES];
         [controlWindow setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary];
 
-        // 일시정지 버튼 (왼쪽)
-        NSButton *pauseBtn = [[NSButton alloc] initWithFrame:NSMakeRect(5, 5, 95, 25)];
-        [pauseBtn setTitle:@"⏸ 일시정지"];
-        [pauseBtn setBezelStyle:NSBezelStyleRounded];
-        [pauseBtn setTarget:buttonHandler];
-        [pauseBtn setAction:@selector(pauseClicked:)];
-        [[controlWindow contentView] addSubview:pauseBtn];
+        NSTextField *label = [[NSTextField alloc] initWithFrame:NSMakeRect(8, 2, width - 16, height - 4)];
+        [label setBezeled:NO];
+        [label setDrawsBackground:NO];
+        [label setEditable:NO];
+        [label setSelectable:NO];
+        [label setTextColor:[NSColor colorWithRed:0.8 green:0.8 blue:0.8 alpha:1.0]];
+        [label setFont:[NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightMedium]];
+        [label setStringValue:[NSString stringWithUTF8String:text]];
 
-        // 재시작 버튼 (가운데)
-        NSButton *restartBtn = [[NSButton alloc] initWithFrame:NSMakeRect(105, 5, 95, 25)];
-        [restartBtn setTitle:@"🔄 재시작"];
-        [restartBtn setBezelStyle:NSBezelStyleRounded];
-        [restartBtn setTarget:buttonHandler];
-        [restartBtn setAction:@selector(restartClicked:)];
-        [[controlWindow contentView] addSubview:restartBtn];
-
-        // 종료 버튼 (오른쪽)
-        NSButton *stopBtn = [[NSButton alloc] initWithFrame:NSMakeRect(205, 5, 95, 25)];
-        [stopBtn setTitle:@"⏹ 종료"];
-        [stopBtn setBezelStyle:NSBezelStyleRounded];
-        [stopBtn setTarget:buttonHandler];
-        [stopBtn setAction:@selector(stopClicked:)];
-        [[controlWindow contentView] addSubview:stopBtn];
-
+        [[controlWindow contentView] addSubview:label];
         [controlWindow orderFrontRegardless];
-
-        // 버튼 상태 초기화
-        pauseClicked = 0;
-        stopClicked = 0;
-        restartClicked = 0;
     }
 }
 
@@ -486,14 +461,25 @@ func ShowStatusOnly(clickX, clickY int, chatOffsetY int, chatW, chatH, inputW, i
 	// 상태 패널 표시
 	C.ShowStatusPanel(C.int(statusX), C.int(statusY), C.int(statusW), C.int(statusH))
 
-	// 컨트롤 패널 표시 (입력 영역 아래 10픽셀, 왼쪽 정렬)
-	controlX := inputX // 입력 영역과 왼쪽 정렬
-	controlY := inputY + inputH + 10 // 입력 영역 아래 10픽셀
-	C.ShowControlPanel(C.int(controlX), C.int(controlY))
+	// 단축키 안내 패널 (입력 영역 아래)
+	infoX := inputX
+	infoY := inputY + inputH + 5
+	cText := C.CString("⌨ F9: 종료")
+	C.ShowInfoPanel(C.int(infoX), C.int(infoY), cText)
+	C.free(unsafe.Pointer(cText))
 
-	// 이벤트 처리 (충분한 시간 확보)
+	// 이벤트 처리
 	pumpEvents()
 	time.Sleep(150 * time.Millisecond)
+	pumpEvents()
+}
+
+// PumpEvents Cocoa 이벤트 루프 펌핑 (외부에서 호출용)
+// waitForResponse 등 장시간 대기 중에도 버튼 클릭 이벤트를 처리하기 위해 사용
+func PumpEvents() {
+	if !initialized {
+		return
+	}
 	pumpEvents()
 }
 
@@ -511,20 +497,23 @@ func ShowForDuration(x, y, width, height int, duration time.Duration) {
 	Hide()
 }
 
-// ShowControlPanel 컨트롤 패널 표시 (일시정지/종료 버튼)
-func ShowControlPanel(x, y int) {
-	if !initialized {
-		Init()
-	}
-	C.ShowControlPanel(C.int(x), C.int(y))
-	pumpEvents()
-	time.Sleep(100 * time.Millisecond)
+// ShowControlPanel 하위 호환용 (미사용)
+func ShowControlPanel(x, y int) {}
+
+// HideControlPanel 하위 호환용 (미사용)
+func HideControlPanel() {
+	C.HideControlPanel()
 	pumpEvents()
 }
 
-// HideControlPanel 컨트롤 패널 숨기기
-func HideControlPanel() {
-	C.HideControlPanel()
+// ShowInfoPanel 단축키 안내 패널 표시 (초록 테두리 아래)
+func ShowInfoPanel(x, y int, text string) {
+	if !initialized {
+		Init()
+	}
+	cText := C.CString(text)
+	C.ShowInfoPanel(C.int(x), C.int(y), cText)
+	C.free(unsafe.Pointer(cText))
 	pumpEvents()
 }
 

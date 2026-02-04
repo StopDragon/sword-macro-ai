@@ -32,9 +32,8 @@ type Engine struct {
 	cfg       *config.Config
 	telem     *telemetry.Telemetry
 	mode      Mode
-	running   bool
-	paused    bool
-	mu        sync.Mutex
+	running bool
+	mu      sync.Mutex
 
 	// 상태
 	currentLevel   int
@@ -85,7 +84,6 @@ func NewEngine(cfg *config.Config, telem *telemetry.Telemetry) *Engine {
 
 	// 핫키 설정
 	e.hotkeyMgr = input.NewHotkeyManager()
-	e.hotkeyMgr.Register(input.KeyF8, e.togglePause)
 	e.hotkeyMgr.Register(input.KeyF9, e.stop)
 
 	return e
@@ -380,12 +378,10 @@ func (e *Engine) setupAndRun() {
 
 	fmt.Println()
 	fmt.Println("=== 매크로 시작 ===")
-	fmt.Println("F8: 일시정지/재개")
 	fmt.Println("F9: 종료")
 	fmt.Println()
 
 	e.running = true
-	e.paused = false
 	e.cycleCount = 0
 	e.totalGold = 0
 	e.startTime = time.Now()
@@ -1365,9 +1361,16 @@ func (e *Engine) readChatTextWaitForChange(maxWait time.Duration) string {
 
 	// 초기 대기: sendCommand 직후 즉시 폴링하면 사용자 명령어만 감지되어
 	// 봇 응답 없이 반환될 수 있음 (stale data 문제)
-	time.Sleep(initialWait)
+	// 대기 중에도 이벤트 펌핑
+	for elapsed := time.Duration(0); elapsed < initialWait; elapsed += 100 * time.Millisecond {
+		overlay.PumpEvents()
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	for time.Since(startTime) < maxWait {
+		// 대기 중에도 오버레이 이벤트 처리
+		overlay.PumpEvents()
+
 		rawText := e.readChatClipboard()
 		if rawText == "" {
 			time.Sleep(pollInterval)
@@ -1412,10 +1415,16 @@ func (e *Engine) waitForResponseInternal(maxWait time.Duration, raw bool) string
 	initialWait := 1 * time.Second
 	lastFiltered := e.filterMyMessages(e.lastRawChatText)
 
-	// 최소 대기 (명령어 처리 시간)
-	time.Sleep(initialWait)
+	// 최소 대기 (명령어 처리 시간) - 대기 중에도 이벤트 펌핑
+	for elapsed := time.Duration(0); elapsed < initialWait; elapsed += 100 * time.Millisecond {
+		overlay.PumpEvents()
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	for time.Since(startTime) < maxWait {
+		// 대기 중에도 오버레이 이벤트 처리 (버튼 클릭 감지)
+		overlay.PumpEvents()
+
 		rawText := e.readChatClipboard()
 		if rawText == "" {
 			time.Sleep(pollInterval)
@@ -1883,58 +1892,17 @@ func (e *Engine) appendAndSend(text string) {
 }
 
 func (e *Engine) checkStop() bool {
-	// 오버레이 버튼 클릭 체크
-	if overlay.CheckStopClicked() {
-		fmt.Println("\n⏹️ 종료 버튼 클릭!")
+	// F9 핫키 체크
+	if input.CheckF9Pressed() {
+		fmt.Println("\n⏹️ F9 종료!")
+		infoX := e.cfg.ClickX - 20
+		infoY := e.cfg.ClickY - 20 + e.cfg.OverlayInputHeight + 5
+		overlay.ShowInfoPanel(infoX, infoY, "⏹ 종료 중...")
 		e.running = false
 		return true
-	}
-	if overlay.CheckRestartClicked() {
-		fmt.Println("\n🔄 재시작 버튼 클릭!")
-		e.running = false
-		return true
-	}
-	if overlay.CheckPauseClicked() {
-		e.togglePause()
-	}
-
-	// 일시정지 체크
-	for e.paused && e.running {
-		overlay.UpdateStatus("⏸️ 일시정지\nF8 또는 버튼 클릭으로 재개")
-		// 일시정지 중에도 버튼 체크
-		if overlay.CheckPauseClicked() {
-			e.togglePause()
-			break
-		}
-		if overlay.CheckStopClicked() {
-			fmt.Println("\n⏹️ 종료 버튼 클릭!")
-			e.running = false
-			return true
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 
 	return !e.running
-}
-
-func (e *Engine) togglePause() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	e.paused = !e.paused
-	if e.paused {
-		fmt.Println("\n⏸️ 일시정지 (F8로 재개)")
-	} else {
-		fmt.Println("\n▶️ 재개")
-	}
-}
-
-func (e *Engine) restart() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	fmt.Println("\n🔄 재시작...")
-	e.running = false
 }
 
 func (e *Engine) stop() {

@@ -25,19 +25,19 @@ void clickMouse(int x, int y) {
     CGEventRef move = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, point, kCGMouseButtonLeft);
     CGEventPost(kCGHIDEventTap, move);
     CFRelease(move);
-    usleep(30000); // 30ms 대기
+    usleep(20000); // 20ms 대기
 
     // Click down
     CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
     CGEventPost(kCGHIDEventTap, down);
     CFRelease(down);
-    usleep(50000); // 50ms 대기
+    usleep(35000); // 35ms 대기
 
     // Click up
     CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
     CGEventPost(kCGHIDEventTap, up);
     CFRelease(up);
-    usleep(30000); // 30ms 대기
+    usleep(20000); // 20ms 대기
 }
 
 void getMousePosition(int* x, int* y) {

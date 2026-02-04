@@ -54,22 +54,22 @@ func GetClipboard() string {
 func ReadChatText(chatX, chatY, inputX, inputY int) string {
 	// 1. 채팅 영역 클릭 (텍스트 선택 가능하도록)
 	Click(chatX, chatY)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(35 * time.Millisecond)
 
 	// 2. 전체 선택 (Cmd+A / Ctrl+A)
 	SelectAll()
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(35 * time.Millisecond)
 
 	// 3. 복사 (Cmd+C / Ctrl+C)
 	CopySelection()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(70 * time.Millisecond)
 
 	// 4. 클립보드에서 텍스트 가져오기
 	text := GetClipboard()
 
 	// 5. 입력창으로 복귀 (선택 해제)
 	Click(inputX, inputY)
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 
 	return text
 }
