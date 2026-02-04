@@ -242,3 +242,12 @@ func getClipboard() string {
 	utf16Slice := (*[1 << 20]uint16)(unsafe.Pointer(pMem))[:size/2:size/2]
 	return syscall.UTF16ToString(utf16Slice)
 }
+
+func clearClipboard() {
+	ret, _, _ := openClipboard.Call(0)
+	if ret == 0 {
+		return
+	}
+	emptyClipboard.Call()
+	closeClipboard.Call()
+}

@@ -21,8 +21,8 @@ type ProfileCheckResult struct {
 // CheckProfileLevel 프로필에서 현재 레벨과 검 이름 조회
 // loopEnhance에서 추출한 공통 로직
 func (e *Engine) CheckProfileLevel() ProfileCheckResult {
-	// 이전 채팅 기록 초기화하여 새 응답 감지 보장
-	e.ResetLastChatText()
+	// 현재 채팅 저장 후 새 응답만 감지
+	e.SaveLastChatText()
 
 	e.sendCommand("/프로필")
 	profileText := e.waitForResponse(5 * time.Second)
@@ -297,8 +297,8 @@ func (e *Engine) LogProfileCheck(profile ProfileCheckResult) {
 // CheckProfileFull 전체 프로필 정보 조회 (Profile 구조체 반환)
 // loopBattle, showMyProfile 등에서 전체 프로필이 필요할 때 사용
 func (e *Engine) CheckProfileFull() *Profile {
-	// 이전 채팅 기록 초기화하여 새 응답 감지 보장
-	e.ResetLastChatText()
+	// 현재 채팅 저장 후 새 응답만 감지
+	e.SaveLastChatText()
 
 	e.sendCommand("/프로필")
 	profileText := e.waitForResponse(5 * time.Second)
@@ -326,6 +326,7 @@ func (e *Engine) CheckOtherProfile(username string) *Profile {
 
 	// 1단계: /프로 + Enter(줄바꿈만)
 	e.sendCommandOnce("/프로")
+	time.Sleep(300 * time.Millisecond)
 
 	// 2단계: @유저명 + Enter 2번(전송)
 	e.appendAndSend(username)

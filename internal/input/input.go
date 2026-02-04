@@ -48,21 +48,30 @@ func GetClipboard() string {
 	return getClipboard()
 }
 
+// ClearClipboard 클립보드 비우기 (복사 실패 시 이전 내용 반환 방지)
+func ClearClipboard() {
+	clearClipboard()
+}
+
 // ReadChatText 채팅 영역에서 텍스트 읽기 (클립보드 복사 방식)
 // chatX, chatY: 채팅 영역 클릭 좌표
 // inputX, inputY: 입력창 좌표 (복귀용)
 func ReadChatText(chatX, chatY, inputX, inputY int) string {
+	// 0. 클립보드 비우기 (이전 TypeText 등으로 오염된 클립보드 방지)
+	// Copy 실패 시 이전 명령어 텍스트가 반환되는 것을 차단
+	ClearClipboard()
+
 	// 1. 채팅 영역 클릭 (텍스트 선택 가능하도록)
 	Click(chatX, chatY)
-	time.Sleep(35 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// 2. 전체 선택 (Cmd+A / Ctrl+A)
 	SelectAll()
-	time.Sleep(35 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// 3. 복사 (Cmd+C / Ctrl+C)
 	CopySelection()
-	time.Sleep(70 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	// 4. 클립보드에서 텍스트 가져오기
 	text := GetClipboard()
@@ -82,15 +91,15 @@ func SendCommand(x, y int, command string) {
 
 	// 2. 입력창 청소 (Cmd+A → Delete)
 	ClearInput()
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
 
 	// 3. 텍스트 입력 (클립보드 + Cmd+V)
 	TypeText(command)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	// 4. 엔터 2번 (줄바꿈 + 전송)
 	PressEnter()
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	PressEnter()
 	time.Sleep(50 * time.Millisecond)
 }
@@ -104,11 +113,11 @@ func SendCommandOnce(x, y int, command string) {
 
 	// 2. 입력창 청소 (Cmd+A → Delete)
 	ClearInput()
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
 
 	// 3. 텍스트 입력 (클립보드 + Cmd+V)
 	TypeText(command)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	// 4. 엔터 1번만 (줄바꿈)
 	PressEnter()
@@ -122,11 +131,11 @@ func SendCommandOnce(x, y int, command string) {
 func AppendAndSend(x, y int, text string) {
 	// 클릭 없이 바로 텍스트 추가 (이전 단계에서 커서가 이미 끝에 있음)
 	TypeText(text)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	// 엔터 2번 (전송)
 	PressEnter()
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	PressEnter()
 	time.Sleep(50 * time.Millisecond)
 }

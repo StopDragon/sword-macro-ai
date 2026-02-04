@@ -351,6 +351,10 @@ func (e *Engine) setupAndRun() {
 	// 프로필 가져오기
 	fmt.Println("📊 프로필 확인 중...")
 	overlay.UpdateStatus("📊 프로필 확인 중...")
+	// 카카오톡 포커스 확보 (카운트다운 중 터미널에 포커스 있을 수 있음)
+	input.Click(e.cfg.ClickX, e.cfg.ClickY)
+	time.Sleep(300 * time.Millisecond)
+	e.SaveLastChatText()
 	e.sendCommand("/프로필")
 
 	profileText := e.waitForResponse(10 * time.Second)
@@ -1225,7 +1229,11 @@ func (e *Engine) loopBattle() {
 			FormatGold(e.totalGold), winRate, e.battleWins, e.battleLosses)
 
 		e.SaveLastChatText()
-		e.sendCommand("/배틀" + target.Username)
+		// 배틀 명령어는 다단계로 전송 (카카오톡 인식 안정성)
+		// /배틀 → 0.3초 → 엔터(줄바꿈) → 0.3초 → @이름 → 엔터,엔터(전송)
+		e.sendCommandOnce("/배틀")
+		time.Sleep(300 * time.Millisecond)
+		e.appendAndSend(target.Username)
 		// 배틀 결과는 상대 이름 포함 → filterMyMessages가 패배 결과를 제거할 수 있으므로 Raw 사용
 		resultText := e.waitForResponseRaw(5 * time.Second)
 
@@ -1244,6 +1252,20 @@ func (e *Engine) loopBattle() {
 		if resultText == "" {
 			fmt.Println("   ⚠️ 배틀 결과를 읽을 수 없음, 스킵")
 			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		// 상대방 0강 감지 → 해당 타겟 제거 후 다음 타겟으로
+		if DetectBattleZeroLevel(resultText) {
+			fmt.Printf("   ⚠️ %s: 상대 검이 0강 → 타겟에서 제거\n", target.Username)
+			// candidates에서 해당 타겟 제거
+			for i, c := range candidates {
+				if c.Username == target.Username {
+					candidates = append(candidates[:i], candidates[i+1:]...)
+					break
+				}
+			}
+			time.Sleep(1 * time.Second)
 			continue
 		}
 

@@ -172,3 +172,9 @@ func getClipboard() string {
 	C.free(unsafe.Pointer(cStr))
 	return str
 }
+
+func clearClipboard() {
+	cText := C.CString("")
+	defer C.free(unsafe.Pointer(cText))
+	C.setClipboard(cText)
+}

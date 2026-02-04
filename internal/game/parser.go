@@ -119,7 +119,8 @@ var (
 	battleVsPattern     = regexp.MustCompile(`(@\S+)\s*『\[([^\]]+)\]`)
 	// 배틀 횟수 제한 패턴 (하루 10회 제한 도달 시)
 	// 〖🚫 배틀 횟수 제한〗 또는 "오늘은 이미 10번의 배틀"
-	battleLimitPattern = regexp.MustCompile(`(?:배틀\s*횟수\s*제한|오늘.*10번.*배틀|오늘\s*배틀.*모두\s*사용)`)
+	battleLimitPattern     = regexp.MustCompile(`(?:배틀\s*횟수\s*제한|오늘.*10번.*배틀|오늘\s*배틀.*모두\s*사용)`)
+	battleZeroLevelPattern = regexp.MustCompile(`(?:0강이라네|0강하고\s*배틀|아직\s*0강)`)
 
 	// 함수 내부에서 사용하는 정규식 (매번 컴파일 방지)
 	acquiredSwordLevelPattern = regexp.MustCompile(`획득\s*검:\s*\[\+?(\d+)\]`)
@@ -601,19 +602,21 @@ func ParseProfileForUser(text string, username string) *Profile {
 
 // extractProfileSection 특정 유저의 프로필 섹션 추출
 // ⚔️ [프로필] 다음에 ● 이름: @유저명 이 있는 섹션만 추출
+// 채팅 히스토리에 같은 유저의 프로필이 여러 번 있을 수 있으므로 마지막(최신) 프로필 반환
 func extractProfileSection(text string, username string) string {
 	lines := strings.Split(text, "\n")
 	var section []string
+	var lastMatchedSection []string
 	foundProfileHeader := false
 	foundTargetUser := false
 
 	for _, line := range lines {
 		// 프로필 헤더 감지: ⚔️ [프로필]
 		if strings.Contains(line, "[프로필]") {
-			// 새 프로필 시작 - 이전 섹션 리셋
+			// 새 프로필 시작 - 이전 타겟 유저 섹션 저장
 			if foundTargetUser {
-				// 이미 타겟 유저 찾았으면 여기서 종료
-				break
+				lastMatchedSection = section
+				foundTargetUser = false
 			}
 			section = []string{line}
 			foundProfileHeader = true
@@ -640,10 +643,15 @@ func extractProfileSection(text string, username string) string {
 		}
 	}
 
-	if !foundTargetUser || len(section) == 0 {
+	// 마지막으로 찾은 섹션이 타겟 유저면 그것을 사용
+	if foundTargetUser {
+		lastMatchedSection = section
+	}
+
+	if lastMatchedSection == nil || len(lastMatchedSection) == 0 {
 		return ""
 	}
-	return strings.Join(section, "\n")
+	return strings.Join(lastMatchedSection, "\n")
 }
 
 // ParseProfile 프로필 파싱
@@ -834,6 +842,12 @@ func ParseBattleResult(text string, myName string) *BattleResult {
 // 하루 10회 배틀 제한에 도달하면 true 반환
 func DetectBattleLimit(text string) bool {
 	return battleLimitPattern.MatchString(text)
+}
+
+// DetectBattleZeroLevel 상대방 검이 0강인 경우 감지
+// "자네가 지목한 상대의 검은 아직 0강이라네" 등의 메시지
+func DetectBattleZeroLevel(text string) bool {
+	return battleZeroLevelPattern.MatchString(text)
 }
 
 // FindTargetsInRanking 랭킹에서 역배 타겟 찾기
