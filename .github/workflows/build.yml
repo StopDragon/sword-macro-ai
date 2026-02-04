@@ -19,6 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set version tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          else
+            echo "VERSION=dev" >> $GITHUB_ENV
+          fi
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -49,18 +57,27 @@ jobs:
 
       - name: Create ZIP
         run: |
-          cd build && zip SwordMacro-macOS.zip SwordMacro-macOS
+          cd build && zip "SwordMacro-mac-${VERSION}.zip" SwordMacro-macOS
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SwordMacro-macOS
-          path: build/SwordMacro-macOS.zip
+          name: SwordMacro-mac-${{ env.VERSION }}
+          path: build/SwordMacro-mac-${{ env.VERSION }}.zip
 
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set version tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          else
+            echo "VERSION=dev" >> $GITHUB_ENV
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -76,13 +93,13 @@ jobs:
 
       - name: Create ZIP
         run: |
-          Compress-Archive -Path build/SwordMacro.exe -DestinationPath SwordMacro-Windows.zip
+          Compress-Archive -Path build/SwordMacro.exe -DestinationPath "SwordMacro-win-${{ env.VERSION }}.zip"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SwordMacro-Windows
-          path: SwordMacro-Windows.zip
+          name: SwordMacro-win-${{ env.VERSION }}
+          path: SwordMacro-win-${{ env.VERSION }}.zip
 
   release:
     needs: [build-macos, build-windows]
@@ -91,6 +108,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -103,8 +123,8 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/SwordMacro-macOS/SwordMacro-macOS.zip
-            artifacts/SwordMacro-Windows/SwordMacro-Windows.zip
+            artifacts/SwordMacro-mac-${{ env.VERSION }}/SwordMacro-mac-${{ env.VERSION }}.zip
+            artifacts/SwordMacro-win-${{ env.VERSION }}/SwordMacro-win-${{ env.VERSION }}.zip
           draft: false
           prerelease: false
           generate_release_notes: true
