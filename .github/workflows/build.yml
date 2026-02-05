@@ -120,13 +120,12 @@ jobs:
         run: ls -R artifacts
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             artifacts/SwordMacro-mac-${{ env.VERSION }}/SwordMacro-mac-${{ env.VERSION }}.zip
             artifacts/SwordMacro-win-${{ env.VERSION }}/SwordMacro-win-${{ env.VERSION }}.zip
           draft: false
           prerelease: false
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
