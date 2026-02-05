@@ -851,14 +851,23 @@ func (e *Engine) loopSpecial() {
 				if result.Success {
 					fmt.Printf("✅ 강화 완료! [%s] +%d\n", itemName, result.FinalLevel)
 					overlay.UpdateStatus("⭐ 특수 강화 완료!\n[%s] +%d", itemName, result.FinalLevel)
+					e.telem.TrySend()
+					return // 목표 달성 → 종료
 				} else {
-					fmt.Printf("💥 강화 중 파괴됨 (최종 레벨: +%d)\n", result.FinalLevel)
-					overlay.UpdateStatus("💥 특수 파괴됨\n[%s] +%d", itemName, result.FinalLevel)
+					// 파괴됨 → 다시 특수 아이템 찾기
+					fmt.Printf("💥 강화 중 파괴됨 (최종 레벨: +%d) → 다시 특수 아이템 찾기\n", result.FinalLevel)
+					overlay.UpdateStatus("💥 특수 파괴됨\n다시 특수 찾는 중...")
+					e.telem.TrySend()
+					time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
+					continue // 루프 계속 → 특수 아이템 다시 찾기
 				}
+			} else {
+				// 강화 목표 없으면 (보관만) 바로 종료
+				fmt.Printf("✅ 특수 아이템 보관 완료! [%s]\n", itemName)
+				overlay.UpdateStatus("⭐ 특수 보관 완료!\n[%s]", itemName)
+				e.telem.TrySend()
+				return
 			}
-
-			e.telem.TrySend()
-			return
 		}
 
 		// 4. 쓰레기/일반/미판별이면 /판매로 새 아이템 받기 (v3 변경점)
@@ -875,6 +884,8 @@ func (e *Engine) loopSpecial() {
 
 			// /판매로 새 아이템 받기
 			e.sendCommand("/판매")
+			// 판매 응답 대기 (응답 없이 다음 /강화 보내면 꼬임)
+			e.readChatTextWaitForChange(5 * time.Second)
 			time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 			continue
 		}
@@ -883,6 +894,8 @@ func (e *Engine) loopSpecial() {
 		fmt.Printf("  ❓ 예상치 못한 아이템 타입: [%s] - 판매 처리\n", state.ItemType)
 		overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n❓ 타입 불명 → 판매")
 		e.sendCommand("/판매")
+		// 판매 응답 대기
+		e.readChatTextWaitForChange(5 * time.Second)
 		time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 	}
 }
@@ -1156,7 +1169,9 @@ func (e *Engine) loopBattle() {
 
 			if len(usernames) == 0 {
 				fmt.Println("⏳ 랭킹에서 유저를 찾을 수 없음, 30초 후 재시도...")
-				time.Sleep(30 * time.Second)
+				if e.sleepWithHotkeyCheck(30 * time.Second) {
+					return
+				}
 				continue
 			}
 
@@ -1198,7 +1213,9 @@ func (e *Engine) loopBattle() {
 
 			if len(candidates) == 0 {
 				fmt.Println("⏳ 적합한 타겟 없음, 30초 후 재시도...")
-				time.Sleep(30 * time.Second)
+				if e.sleepWithHotkeyCheck(30 * time.Second) {
+					return
+				}
 				continue
 			}
 
@@ -1948,6 +1965,25 @@ func (e *Engine) checkStop() bool {
 	}
 
 	return !e.running
+}
+
+// sleepWithHotkeyCheck 대기 중에도 핫키 체크 (200ms 간격)
+// 긴 Sleep 중에도 F9로 즉시 종료 가능
+func (e *Engine) sleepWithHotkeyCheck(duration time.Duration) bool {
+	const checkInterval = 200 * time.Millisecond
+	elapsed := time.Duration(0)
+	for elapsed < duration {
+		if e.checkStop() {
+			return true // 종료 요청됨
+		}
+		sleepTime := checkInterval
+		if duration-elapsed < checkInterval {
+			sleepTime = duration - elapsed
+		}
+		time.Sleep(sleepTime)
+		elapsed += sleepTime
+	}
+	return false // 정상 완료
 }
 
 func (e *Engine) stop() {
