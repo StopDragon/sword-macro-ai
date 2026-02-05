@@ -57,10 +57,6 @@ func ClearClipboard() {
 // chatX, chatY: 채팅 영역 클릭 좌표
 // inputX, inputY: 입력창 좌표 (복귀용)
 func ReadChatText(chatX, chatY, inputX, inputY int) string {
-	// 0. 클립보드 비우기 (이전 TypeText 등으로 오염된 클립보드 방지)
-	// Copy 실패 시 이전 명령어 텍스트가 반환되는 것을 차단
-	ClearClipboard()
-
 	// 1. 채팅 영역 클릭 (텍스트 선택 가능하도록)
 	Click(chatX, chatY)
 	time.Sleep(50 * time.Millisecond)
