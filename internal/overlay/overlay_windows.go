@@ -35,6 +35,9 @@ var (
 	procCreateSolidBrush           = gdi32.NewProc("CreateSolidBrush")
 	procInvalidateRect             = user32.NewProc("InvalidateRect")
 	procDrawTextW                  = user32.NewProc("DrawTextW")
+	procPeekMessageW               = user32.NewProc("PeekMessageW")
+	procTranslateMessage           = user32.NewProc("TranslateMessage")
+	procDispatchMessageW           = user32.NewProc("DispatchMessageW")
 )
 
 const (
@@ -61,7 +64,25 @@ const (
 	DT_LEFT      = 0x00000000
 	DT_WORDBREAK = 0x00000010
 	DT_NOPREFIX  = 0x00000800 // & 문자를 단축키 표시로 해석하지 않음
+
+	// PeekMessage 플래그
+	PM_REMOVE = 0x0001
 )
+
+// POINT 좌표 구조체
+type POINT struct {
+	X, Y int32
+}
+
+// MSG Windows 메시지 구조체
+type MSG struct {
+	Hwnd    uintptr
+	Message uint32
+	WParam  uintptr
+	LParam  uintptr
+	Time    uint32
+	Pt      POINT
+}
 
 type WNDCLASSEXW struct {
 	CbSize        uint32
@@ -401,8 +422,23 @@ func CheckRestartClicked() bool {
 	return false
 }
 
-// PumpEvents 이벤트 루프 펌핑 (Windows에서는 불필요)
-func PumpEvents() {}
+// PumpEvents 이벤트 루프 펌핑 (Windows 메시지 큐 처리)
+func PumpEvents() {
+	var msg MSG
+	// 대기 없이 메시지 큐에서 메시지 가져오기
+	for {
+		ret, _, _ := procPeekMessageW.Call(
+			uintptr(unsafe.Pointer(&msg)),
+			0, 0, 0,
+			PM_REMOVE,
+		)
+		if ret == 0 {
+			break
+		}
+		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
+		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
+	}
+}
 
 // ClearLog 로그 버퍼 초기화
 func ClearLog() {
