@@ -25,6 +25,7 @@ const (
 	ModeSpecial  // 특수 아이템 뽑기
 	ModeGoldMine // 골드 채굴
 	ModeBattle   // 자동 배틀 (역배)
+	ModeMonitor  // 모니터링 (패시브 데이터 수집)
 )
 
 // Engine 게임 엔진
@@ -144,8 +145,9 @@ func (e *Engine) RunMenu() {
 		fmt.Println("2. 특수 아이템 뽑기")
 		fmt.Println("3. 골드 채굴 (돈벌기)")
 		fmt.Println("4. 자동 배틀 (역배)")
-		fmt.Println("5. 내 프로필 분석")
-		fmt.Println("6. 옵션 설정")
+		fmt.Println("5. 모니터링 (데이터 수집)")
+		fmt.Println("6. 내 프로필 분석")
+		fmt.Println("7. 옵션 설정")
 		fmt.Println("0. 종료")
 		fmt.Println()
 		fmt.Print("선택: ")
@@ -163,8 +165,10 @@ func (e *Engine) RunMenu() {
 		case "4":
 			e.runBattleMode(reader)
 		case "5":
-			e.showMyProfile()
+			e.runMonitorMode()
 		case "6":
+			e.showMyProfile()
+		case "7":
 			e.showSettings(reader)
 		case "0":
 			fmt.Println("프로그램을 종료합니다.")
@@ -548,6 +552,8 @@ func (e *Engine) setupAndRun() {
 		e.telem.SetMode("goldmine")
 	case ModeBattle:
 		e.telem.SetMode("battle")
+	case ModeMonitor:
+		e.telem.SetMode("monitor")
 	}
 
 	// 모드별 실행
@@ -560,6 +566,8 @@ func (e *Engine) setupAndRun() {
 		e.loopGoldMine()
 	case ModeBattle:
 		e.loopBattle()
+	case ModeMonitor:
+		e.loopMonitor()
 	}
 
 	// 종료 시 오버레이 숨기기
@@ -2469,4 +2477,327 @@ func (e *Engine) showMyProfile() {
 
 	// 오버레이 숨기기
 	overlay.HideAll()
+}
+
+// runMonitorMode 모니터링 모드 실행 (패시브 데이터 수집)
+func (e *Engine) runMonitorMode() {
+	fmt.Println()
+	fmt.Println("=== 모니터링 모드 ===")
+	fmt.Println("다른 유저들의 강화/판매/배틀 데이터를 수집합니다.")
+	fmt.Println("명령어를 보내지 않고 채팅만 읽어서 데이터를 모읍니다.")
+	fmt.Println()
+
+	e.mode = ModeMonitor
+	e.setupAndRun()
+}
+
+// loopMonitor 모니터링 루프 (패시브 데이터 수집)
+func (e *Engine) loopMonitor() {
+	// 모니터링 통계 (상세)
+	var monitorStats struct {
+		// 강화
+		enhanceTotal   int
+		enhanceSuccess int
+		enhanceHold    int
+		enhanceDestroy int
+		enhanceByLevel map[int]struct{ success, hold, destroy int }
+		// 배틀
+		battleTotal  int
+		battleUpsets int            // 역배 횟수
+		battleGold   int            // 총 전리품
+		battleByDiff map[int]int    // 레벨차별 역배 카운트
+		// 판매
+		saleTotal int
+		saleGold  int // 총 판매액
+		// 특수
+		specialTotal   int
+		specialByName  map[string]int // 아이템별 카운트
+	}
+	monitorStats.enhanceByLevel = make(map[int]struct{ success, hold, destroy int })
+	monitorStats.battleByDiff = make(map[int]int)
+	monitorStats.specialByName = make(map[string]int)
+
+	// 중복 방지용 최근 이벤트 해시 (최대 100개)
+	recentHashes := make(map[string]time.Time)
+	const maxHashes = 100
+	const hashExpiry = 30 * time.Second
+
+	// 채팅 텍스트 버퍼 (이전 내용과 비교용)
+	lastProcessedText := e.lastRawChatText
+
+	// 시작 시간
+	monitorStart := time.Now()
+
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("  👀 모니터링 모드 시작")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("  다른 유저들의 강화/배틀/판매 이벤트를 감지합니다.")
+	fmt.Println("  명령어를 보내지 않아 티나지 않습니다.")
+	fmt.Println()
+
+	overlay.UpdateStatus("👀 모니터링 중...\n감지: 0건")
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for e.running {
+		select {
+		case <-ticker.C:
+			// 채팅 텍스트 읽기
+			currentText := e.readChatClipboard()
+			if currentText == "" || currentText == lastProcessedText {
+				continue
+			}
+
+			// 새로 추가된 부분 추출
+			newText := extractNewText(lastProcessedText, currentText)
+			if newText == "" {
+				lastProcessedText = currentText
+				continue
+			}
+
+			// 오래된 해시 정리
+			now := time.Now()
+			for hash, t := range recentHashes {
+				if now.Sub(t) > hashExpiry {
+					delete(recentHashes, hash)
+				}
+			}
+			if len(recentHashes) > maxHashes {
+				// 가장 오래된 것들 삭제
+				for hash := range recentHashes {
+					delete(recentHashes, hash)
+					if len(recentHashes) <= maxHashes/2 {
+						break
+					}
+				}
+			}
+
+			// 이벤트 파싱 및 처리
+			events := ParseMonitorEvents(newText)
+			for _, event := range events {
+				// 중복 체크
+				hash := event.Hash()
+				if _, exists := recentHashes[hash]; exists {
+					continue
+				}
+				recentHashes[hash] = now
+
+				// 이벤트 타입별 처리
+				switch event.Type {
+				case "enhance":
+					monitorStats.enhanceTotal++
+					result := "?"
+					levelStat := monitorStats.enhanceByLevel[event.FromLevel]
+
+					if event.Success {
+						result = "성공"
+						monitorStats.enhanceSuccess++
+						levelStat.success++
+					} else if event.Destroyed {
+						result = "파괴"
+						monitorStats.enhanceDestroy++
+						levelStat.destroy++
+					} else {
+						result = "유지"
+						monitorStats.enhanceHold++
+						levelStat.hold++
+					}
+					monitorStats.enhanceByLevel[event.FromLevel] = levelStat
+
+					// 아이템 정보가 있으면 같이 출력
+					itemInfo := ""
+					if event.ItemName != "" {
+						itemInfo = fmt.Sprintf(" [%s]", event.ItemName)
+					}
+					fmt.Printf("⚔️ [강화] +%d → +%d (%s)%s\n", event.FromLevel, event.ToLevel, result, itemInfo)
+					logger.Info("[Monitor] 강화: +%d → +%d (%s) %s %s", event.FromLevel, event.ToLevel, result, event.ItemType, event.ItemName)
+
+					// 텔레메트리 기록
+					if event.Success {
+						e.telem.RecordEnhanceWithType(event.ItemType, event.ToLevel-1, "success")
+					} else if event.Destroyed {
+						e.telem.RecordEnhanceWithType(event.ItemType, event.FromLevel, "destroy")
+					} else {
+						e.telem.RecordEnhanceWithType(event.ItemType, event.FromLevel, "hold")
+					}
+
+				case "battle":
+					monitorStats.battleTotal++
+					monitorStats.battleGold += event.GoldEarned
+
+					// 역배 여부 (승자 레벨이 패자보다 낮음)
+					levelDiff := event.WinnerLevel - event.LoserLevel
+					isUpset := levelDiff < 0
+					if isUpset {
+						monitorStats.battleUpsets++
+						absLevelDiff := -levelDiff
+						monitorStats.battleByDiff[absLevelDiff]++
+					}
+
+					upsetMark := ""
+					if isUpset {
+						upsetMark = " 🎯역배!"
+					}
+					fmt.Printf("⚔️ [배틀] %s(+%d) vs %s(+%d) → 승자: %s, %dG%s\n",
+						event.Winner, event.WinnerLevel, event.Loser, event.LoserLevel,
+						event.Winner, event.GoldEarned, upsetMark)
+					logger.Info("[Monitor] 배틀: %s(+%d) vs %s(+%d) → %s 승리, %dG, 역배=%v",
+						event.Winner, event.WinnerLevel, event.Loser, event.LoserLevel,
+						event.Winner, event.GoldEarned, isUpset)
+
+					// 텔레메트리
+					e.telem.RecordMonitoredBattle(event.WinnerLevel, event.LoserLevel, levelDiff, event.GoldEarned)
+
+				case "sale":
+					monitorStats.saleTotal++
+					monitorStats.saleGold += event.GoldEarned
+
+					itemInfo := event.ItemName
+					if itemInfo == "" {
+						itemInfo = "알수없음"
+					}
+					fmt.Printf("💰 [판매] +%d %s → %sG\n", event.Level, itemInfo, FormatGold(event.GoldEarned))
+					logger.Info("[Monitor] 판매: +%d %s (%s) → %dG", event.Level, itemInfo, event.ItemType, event.GoldEarned)
+
+					// 텔레메트리
+					e.telem.RecordSaleWithType(event.ItemType, event.Level, event.GoldEarned)
+
+				case "special":
+					monitorStats.specialTotal++
+					monitorStats.specialByName[event.ItemName]++
+
+					fmt.Printf("✨ [특수] %s 발견!\n", event.ItemName)
+					logger.Info("[Monitor] 특수 아이템: %s", event.ItemName)
+
+					// 텔레메트리
+					e.telem.RecordSpecialWithName(event.ItemName)
+				}
+			}
+
+			// 오버레이 업데이트
+			elapsed := time.Since(monitorStart)
+			overlay.UpdateStatus("👀 모니터링 중... (%s)\n"+
+				"강화: %d (성공%d/유지%d/파괴%d)\n"+
+				"배틀: %d (역배%d) | 판매: %d | 특수: %d",
+				formatDuration(elapsed),
+				monitorStats.enhanceTotal, monitorStats.enhanceSuccess, monitorStats.enhanceHold, monitorStats.enhanceDestroy,
+				monitorStats.battleTotal, monitorStats.battleUpsets, monitorStats.saleTotal, monitorStats.specialTotal)
+
+			lastProcessedText = currentText
+		}
+	}
+
+	// 종료 시 상세 리포트
+	elapsed := time.Since(monitorStart)
+	totalEvents := monitorStats.enhanceTotal + monitorStats.battleTotal +
+		monitorStats.saleTotal + monitorStats.specialTotal
+
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("  📊 모니터링 세션 리포트 (%s)\n", formatDuration(elapsed))
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	// 강화 통계
+	fmt.Printf("\n  ⚔️ 강화 통계 (총 %d건)\n", monitorStats.enhanceTotal)
+	if monitorStats.enhanceTotal > 0 {
+		fmt.Printf("     성공: %d건 (%.1f%%)\n", monitorStats.enhanceSuccess,
+			float64(monitorStats.enhanceSuccess)/float64(monitorStats.enhanceTotal)*100)
+		fmt.Printf("     유지: %d건 (%.1f%%)\n", monitorStats.enhanceHold,
+			float64(monitorStats.enhanceHold)/float64(monitorStats.enhanceTotal)*100)
+		fmt.Printf("     파괴: %d건 (%.1f%%)\n", monitorStats.enhanceDestroy,
+			float64(monitorStats.enhanceDestroy)/float64(monitorStats.enhanceTotal)*100)
+
+		// 레벨별 통계 (샘플 5개 이상인 레벨만)
+		fmt.Println("     ─────────────────────────────")
+		fmt.Println("     레벨별 (샘플 5건 이상):")
+		for level := 0; level <= 15; level++ {
+			stat := monitorStats.enhanceByLevel[level]
+			total := stat.success + stat.hold + stat.destroy
+			if total >= 5 {
+				successRate := float64(stat.success) / float64(total) * 100
+				fmt.Printf("     +%d→+%d: %d건 (성공률 %.1f%%)\n", level, level+1, total, successRate)
+			}
+		}
+	}
+
+	// 배틀 통계
+	fmt.Printf("\n  ⚔️ 배틀 통계 (총 %d건)\n", monitorStats.battleTotal)
+	if monitorStats.battleTotal > 0 {
+		fmt.Printf("     총 전리품: %sG\n", FormatGold(monitorStats.battleGold))
+		fmt.Printf("     역배 발생: %d건\n", monitorStats.battleUpsets)
+
+		// 역배 레벨차별 통계
+		if monitorStats.battleUpsets > 0 {
+			fmt.Println("     ─────────────────────────────")
+			fmt.Println("     역배 레벨차별:")
+			for diff := 1; diff <= 10; diff++ {
+				if count := monitorStats.battleByDiff[diff]; count > 0 {
+					fmt.Printf("     %d레벨차: %d건\n", diff, count)
+				}
+			}
+		}
+	}
+
+	// 판매 통계
+	fmt.Printf("\n  💰 판매 통계 (총 %d건)\n", monitorStats.saleTotal)
+	if monitorStats.saleTotal > 0 {
+		fmt.Printf("     총 판매액: %sG\n", FormatGold(monitorStats.saleGold))
+		avgSale := monitorStats.saleGold / monitorStats.saleTotal
+		fmt.Printf("     평균 판매가: %sG\n", FormatGold(avgSale))
+	}
+
+	// 특수 아이템 통계
+	fmt.Printf("\n  ✨ 특수 아이템 (총 %d건)\n", monitorStats.specialTotal)
+	if monitorStats.specialTotal > 0 {
+		for name, count := range monitorStats.specialByName {
+			fmt.Printf("     - %s: %d건\n", name, count)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("  📈 총 수집: %d건\n", totalEvents)
+	if elapsed.Minutes() > 0 {
+		eventsPerMin := float64(totalEvents) / elapsed.Minutes()
+		fmt.Printf("  📊 분당 이벤트: %.1f건\n", eventsPerMin)
+	}
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+}
+
+// extractNewText 이전 텍스트와 현재 텍스트를 비교하여 새로 추가된 부분 추출
+func extractNewText(oldText, newText string) string {
+	if oldText == "" {
+		return newText
+	}
+
+	// 이전 텍스트의 마지막 줄들을 찾아서 새 텍스트에서 그 이후 부분 추출
+	oldLines := strings.Split(oldText, "\n")
+	newLines := strings.Split(newText, "\n")
+
+	// 이전 텍스트의 마지막 몇 줄을 기준으로 찾기
+	searchLines := 3
+	if len(oldLines) < searchLines {
+		searchLines = len(oldLines)
+	}
+
+	// 마지막 몇 줄의 패턴
+	oldSuffix := strings.Join(oldLines[len(oldLines)-searchLines:], "\n")
+
+	// 새 텍스트에서 해당 패턴 이후 찾기
+	idx := strings.Index(newText, oldSuffix)
+	if idx != -1 {
+		afterIdx := idx + len(oldSuffix)
+		if afterIdx < len(newText) {
+			return strings.TrimSpace(newText[afterIdx:])
+		}
+	}
+
+	// 찾지 못하면 새 줄들만 반환 (보수적 접근)
+	if len(newLines) > len(oldLines) {
+		return strings.Join(newLines[len(oldLines):], "\n")
+	}
+
+	return ""
 }

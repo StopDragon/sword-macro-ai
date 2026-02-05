@@ -1034,3 +1034,269 @@ func ExtractFullItemInfo(text string) *ItemInfo {
 
 	return info
 }
+
+// === 모니터링 모드 파서 ===
+
+// MonitorEvent 모니터링에서 감지된 이벤트
+type MonitorEvent struct {
+	Type        string // "enhance", "battle", "sale", "special"
+	ItemName    string // 아이템 이름
+	ItemType    string // "normal", "special", "trash"
+	Level       int    // 현재 레벨 (판매 시)
+	FromLevel   int    // 강화 전 레벨
+	ToLevel     int    // 강화 후 레벨
+	Success     bool   // 강화 성공 여부
+	Destroyed   bool   // 파괴 여부
+	Winner      string // 배틀 승자
+	Loser       string // 배틀 패자
+	WinnerLevel int    // 승자 레벨
+	LoserLevel  int    // 패자 레벨
+	GoldEarned  int    // 획득 골드
+	RawText     string // 원본 텍스트 (디버깅용)
+}
+
+// Hash 이벤트 고유 해시 (중복 방지용)
+func (e *MonitorEvent) Hash() string {
+	switch e.Type {
+	case "enhance":
+		return "e_" + strconv.Itoa(e.FromLevel) + "_" + strconv.Itoa(e.ToLevel) + "_" + e.ItemName
+	case "battle":
+		return "b_" + e.Winner + "_" + e.Loser + "_" + strconv.Itoa(e.GoldEarned)
+	case "sale":
+		return "s_" + strconv.Itoa(e.Level) + "_" + strconv.Itoa(e.GoldEarned)
+	case "special":
+		return "sp_" + e.ItemName
+	}
+	return e.RawText
+}
+
+// 모니터링용 정규식 패턴
+var (
+	// 강화 결과 패턴: "+N → +M" 또는 "+N -> +M"
+	monitorEnhancePattern = regexp.MustCompile(`\+(\d+)\s*[→\->]+\s*\+(\d+)`)
+	// 강화 성공 패턴 (더 넓은 범위)
+	monitorSuccessPattern = regexp.MustCompile(`(?:강화.*성공|레벨.*상승|성공.*강화)`)
+	// 강화 파괴 패턴
+	monitorDestroyPattern = regexp.MustCompile(`(?:파괴|부서|사라)`)
+	// 강화 유지 패턴
+	monitorHoldPattern = regexp.MustCompile(`(?:유지|실패.*유지|레벨.*유지)`)
+	// 배틀 중계 패턴: "〖🎙️ 배틀 중계〗" 감지
+	monitorBattleHeaderPattern = regexp.MustCompile(`배틀\s*중계`)
+	// 배틀 참가자 패턴: "@유저 『[+N] 검이름』" 또는 "『[+N] 검이름』" (유저명 없을 수 있음)
+	monitorBattleVsPattern = regexp.MustCompile(`(@\S+)?\s*『\[\+?(\d+)\]\s*([^』]+)』`)
+	// 배틀 승자 패턴 (더 유연하게 - "님 승리" 포함)
+	monitorBattleWinnerPattern = regexp.MustCompile(`결과[:\s]*(@\S+)\s*(?:의\s*)?승리|(@\S+)\s*(?:이|가)\s*이겼|결과\]\s*(@\S+)?\s*님?\s*승리`)
+	// 전리품 패턴
+	monitorBattleGoldPattern = regexp.MustCompile(`전리품[:\s]*(\d{1,3}(?:,\d{3})*)\s*G`)
+	// 판매 결과 패턴 (더 넓은 범위)
+	monitorSaleGoldPattern = regexp.MustCompile(`획득\s*골드[:\s]*\+?(\d{1,3}(?:,\d{3})*)\s*G`)
+	// 판매 태그 패턴
+	monitorSaleTagPattern = regexp.MustCompile(`\[판매\]`)
+	// 특수 아이템 발견 패턴 (더 넓은 범위)
+	monitorSpecialPattern = regexp.MustCompile(`(?:특수|히든|hidden|레어|희귀).*?『([^』]+)』`)
+	// 게임 봇 메시지 감지 패턴
+	gameBotIndicators = regexp.MustCompile(`(?:━━|──|\[강화\]|\[배틀\]|\[판매\]|\[프로필\]|\[랭킹\]|⚔️|💰|💵|💶|📊)`)
+)
+
+// IsGameBotMessage 게임 봇 메시지인지 확인
+func IsGameBotMessage(text string) bool {
+	// 게임 봇 메시지 특징:
+	// 1. 구분선 포함 (━━━ 또는 ───)
+	// 2. 게임 태그 포함 ([강화], [배틀], [판매])
+	// 3. 게임 이모지 포함 (⚔️, 💰, 💵, 💶, 📊)
+	// 4. 레벨 패턴 포함 (+N, [+N])
+	return gameBotIndicators.MatchString(text)
+}
+
+// ParseMonitorEvents 텍스트에서 모니터링 이벤트 파싱
+func ParseMonitorEvents(text string) []MonitorEvent {
+	var events []MonitorEvent
+
+	lines := strings.Split(text, "\n")
+
+	// 블록 단위로 분석 (여러 줄이 하나의 이벤트)
+	// 빈 줄 또는 구분자로 블록 분리
+	var currentBlock []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "━") || strings.HasPrefix(line, "─") {
+			// 블록 종료 - 분석
+			if len(currentBlock) > 0 {
+				blockText := strings.Join(currentBlock, "\n")
+				if evt := parseMonitorBlock(blockText); evt != nil {
+					events = append(events, *evt)
+				}
+				currentBlock = nil
+			}
+			continue
+		}
+		currentBlock = append(currentBlock, line)
+	}
+
+	// 마지막 블록 처리
+	if len(currentBlock) > 0 {
+		blockText := strings.Join(currentBlock, "\n")
+		if evt := parseMonitorBlock(blockText); evt != nil {
+			events = append(events, *evt)
+		}
+	}
+
+	return events
+}
+
+// parseMonitorBlock 단일 블록에서 이벤트 파싱
+func parseMonitorBlock(text string) *MonitorEvent {
+	// 게임 봇 메시지가 아니면 스킵
+	if !IsGameBotMessage(text) {
+		return nil
+	}
+
+	// 1. 강화 이벤트 감지
+	if matches := monitorEnhancePattern.FindStringSubmatch(text); len(matches) > 2 {
+		fromLevel, _ := strconv.Atoi(matches[1])
+		toLevel, _ := strconv.Atoi(matches[2])
+
+		evt := &MonitorEvent{
+			Type:      "enhance",
+			FromLevel: fromLevel,
+			ToLevel:   toLevel,
+			RawText:   text,
+		}
+
+		// 결과 판단 (우선순위: 파괴 > 성공 > 유지)
+		if monitorDestroyPattern.MatchString(text) {
+			evt.Destroyed = true
+			evt.ToLevel = 0
+		} else if toLevel > fromLevel {
+			// 레벨이 올랐으면 확실히 성공
+			evt.Success = true
+		} else if monitorSuccessPattern.MatchString(text) {
+			evt.Success = true
+		} else if monitorHoldPattern.MatchString(text) || toLevel == fromLevel {
+			// 유지 (Success=false, Destroyed=false)
+		}
+
+		// 아이템 정보 추출
+		evt.ItemName = ExtractItemName(text)
+		if evt.ItemName != "" {
+			evt.ItemType = DetermineItemType(evt.ItemName)
+		} else {
+			evt.ItemType = "normal" // 기본값
+		}
+
+		return evt
+	}
+
+	// 2. 배틀 이벤트 감지
+	// 배틀 중계 헤더 또는 전리품 패턴으로 감지
+	isBattleContext := monitorBattleHeaderPattern.MatchString(text) ||
+		(monitorBattleGoldPattern.MatchString(text) && strings.Contains(text, "전리품"))
+
+	if isBattleContext {
+		evt := &MonitorEvent{
+			Type:    "battle",
+			RawText: text,
+		}
+
+		// 참가자 정보 추출 (유저명 없을 수 있음)
+		vsMatches := monitorBattleVsPattern.FindAllStringSubmatch(text, -1)
+		if len(vsMatches) >= 2 {
+			// 첫 번째 참가자
+			user1 := vsMatches[0][1] // 빈 문자열일 수 있음
+			level1, _ := strconv.Atoi(vsMatches[0][2])
+			sword1 := vsMatches[0][3]
+
+			// 두 번째 참가자
+			user2 := vsMatches[1][1] // 빈 문자열일 수 있음
+			level2, _ := strconv.Atoi(vsMatches[1][2])
+			sword2 := vsMatches[1][3]
+
+			// 유저명이 없으면 검 이름으로 대체
+			if user1 == "" {
+				user1 = "[" + sword1 + "]"
+			}
+			if user2 == "" {
+				user2 = "[" + sword2 + "]"
+			}
+
+			// 승자 추출 시도
+			winnerFound := false
+			if matches := monitorBattleWinnerPattern.FindStringSubmatch(text); len(matches) > 1 {
+				for i := 1; i < len(matches); i++ {
+					if matches[i] != "" {
+						evt.Winner = matches[i]
+						winnerFound = true
+						break
+					}
+				}
+			}
+
+			// 승자 매칭 - 정확한 정보만 기록 (추정하지 않음)
+			if winnerFound && evt.Winner == user1 {
+				evt.WinnerLevel = level1
+				evt.Loser = user2
+				evt.LoserLevel = level2
+			} else if winnerFound && evt.Winner == user2 {
+				evt.WinnerLevel = level2
+				evt.Loser = user1
+				evt.LoserLevel = level1
+			}
+			// 승자를 정확히 파악하지 못하면 이벤트 기록 안 함
+			// (WinnerLevel/LoserLevel이 0이면 아래 검증에서 걸러짐)
+		}
+
+		// 전리품
+		if matches := monitorBattleGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			evt.GoldEarned, _ = strconv.Atoi(goldStr)
+		}
+
+		// 유효한 배틀인지 확인 (레벨 정보가 있어야 함)
+		if evt.WinnerLevel > 0 && evt.LoserLevel > 0 {
+			return evt
+		}
+	}
+
+	// 3. 판매 이벤트 감지
+	isSaleContext := monitorSaleTagPattern.MatchString(text) ||
+		(monitorSaleGoldPattern.MatchString(text) && !strings.Contains(text, "배틀") && !strings.Contains(text, "전리품"))
+
+	if isSaleContext {
+		evt := &MonitorEvent{
+			Type:    "sale",
+			RawText: text,
+		}
+
+		// 판매 금액
+		if matches := monitorSaleGoldPattern.FindStringSubmatch(text); len(matches) > 1 {
+			goldStr := strings.ReplaceAll(matches[1], ",", "")
+			evt.GoldEarned, _ = strconv.Atoi(goldStr)
+		}
+
+		// 레벨 및 아이템 정보
+		evt.Level = ExtractLevel(text)
+		evt.ItemName = ExtractItemName(text)
+		if evt.ItemName != "" {
+			evt.ItemType = DetermineItemType(evt.ItemName)
+		}
+
+		// 유효한 판매인지 확인 (금액이 있어야 함)
+		if evt.GoldEarned > 0 {
+			return evt
+		}
+	}
+
+	// 4. 특수 아이템 감지
+	if matches := monitorSpecialPattern.FindStringSubmatch(text); len(matches) > 1 {
+		evt := &MonitorEvent{
+			Type:     "special",
+			ItemName: strings.TrimSpace(matches[1]),
+			ItemType: "special",
+			RawText:  text,
+		}
+		return evt
+	}
+
+	return nil
+}

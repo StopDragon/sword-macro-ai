@@ -649,6 +649,47 @@ func (t *Telemetry) RecordGoldChange(currentGold int) {
 	}
 }
 
+// RecordMonitoredBattle 모니터링에서 관찰한 배틀 기록 (관찰자 관점)
+// 다른 유저들의 배틀을 관찰하여 레벨차별 통계 수집
+func (t *Telemetry) RecordMonitoredBattle(winnerLevel, loserLevel, levelDiff, goldEarned int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled {
+		return
+	}
+
+	// 모니터링 배틀 카운트 증가
+	t.stats.BattleCount++
+
+	// 레벨차별 통계 (승자가 낮은 레벨이면 역배)
+	isUpset := levelDiff < 0
+	absLevelDiff := levelDiff
+	if absLevelDiff < 0 {
+		absLevelDiff = -absLevelDiff
+	}
+
+	if isUpset && absLevelDiff <= 20 {
+		t.stats.UpsetAttempts++
+		t.stats.UpsetWins++ // 모니터링에서는 이긴 배틀만 감지됨
+
+		if t.stats.UpsetStatsByDiff == nil {
+			t.stats.UpsetStatsByDiff = make(map[int]*UpsetStat)
+		}
+		if t.stats.UpsetStatsByDiff[absLevelDiff] == nil {
+			t.stats.UpsetStatsByDiff[absLevelDiff] = &UpsetStat{}
+		}
+		stat := t.stats.UpsetStatsByDiff[absLevelDiff]
+		stat.Attempts++
+		stat.Wins++
+		stat.GoldEarned += goldEarned
+	}
+
+	// 일반 배틀도 기록
+	if goldEarned > 0 {
+		t.stats.BattleGoldEarned += goldEarned
+	}
+}
+
 // RecordProfile 프로필 정보 기록 (세션 시작 시)
 // 주의: username은 로컬 디버그 로깅에만 사용되며, 서버로 전송되지 않음 (개인정보 보호)
 func (t *Telemetry) RecordProfile(username string, level int, gold int) {
