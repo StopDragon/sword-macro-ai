@@ -218,22 +218,20 @@ func (e *Engine) runGoldMineMode() {
 	fmt.Println()
 	fmt.Println("=== 골드 채굴 설정 ===")
 
-	// 서버 통계 기반 타입별 최적 레벨 조회
+	// 서버 통계 기반 최적 레벨 조회
 	fmt.Print("📊 서버 데이터 분석 중...")
-	optimalLevels := GetOptimalLevelsByType()
+	optimalLevel, source := GetOptimalSellLevel(0)
 	efficiencies := GetAllLevelEfficiencies()
 	fmt.Print("\r                              \r") // 로딩 메시지 지우기
 
-	// 타입별 서버 추천 표시
-	serverNormal := optimalLevels["normal"]
-	serverSpecial := optimalLevels["special"]
-	fmt.Println("📊 서버 추천 판매 레벨 (실측 데이터 기반):")
-	fmt.Printf("   - 일반 아이템: +%d\n", serverNormal)
-	fmt.Printf("   - 특수 아이템: +%d\n", serverSpecial)
+	// 최적 레벨의 효율성 정보
+	var optimalGPM float64
+	if eff := GetLevelEfficiency(optimalLevel); eff != nil {
+		optimalGPM = eff.GoldPerMinute
+	}
 
 	// 레벨별 효율성 표시 (서버 데이터가 있는 경우)
 	if len(efficiencies) > 0 {
-		fmt.Println()
 		fmt.Println("📈 레벨별 시간 효율 (G/분):")
 		fmt.Println("   레벨 |  판매가  | 성공률 | G/분")
 		fmt.Println("   -----|---------|--------|-------")
@@ -251,51 +249,68 @@ func (e *Engine) runGoldMineMode() {
 			)
 		}
 		fmt.Println("   (★ = 최적 레벨)")
+		fmt.Println()
 	}
 
-	// 일반 아이템 목표 레벨 입력
-	fmt.Println()
-	fmt.Printf("일반 아이템 목표 레벨 (엔터=%d): ", serverNormal)
-	inputNormal, _ := reader.ReadString('\n')
-	inputNormal = strings.TrimSpace(inputNormal)
+	// 최적 전략 표시 및 사용 여부 확인
+	fmt.Printf("📊 최적 전략: +%d 판매 (예상 %.0f G/분, %s)\n", optimalLevel, optimalGPM, source)
+	fmt.Print("추천 설정을 사용하시겠습니까? (Y/n): ")
+	useRecommended, _ := reader.ReadString('\n')
+	useRecommended = strings.TrimSpace(strings.ToLower(useRecommended))
 
-	if inputNormal == "" {
-		e.normalTargetLevel = serverNormal
-	} else if level, err := strconv.Atoi(inputNormal); err == nil && level >= 1 && level <= 20 {
-		e.normalTargetLevel = level
+	var targetLevel int
+
+	if useRecommended == "" || useRecommended == "y" || useRecommended == "yes" {
+		// 추천 설정 사용
+		targetLevel = optimalLevel
+		fmt.Printf("✅ 추천 설정 적용: +%d 판매\n", targetLevel)
 	} else {
-		e.normalTargetLevel = serverNormal
+		// 커스텀 설정
+		fmt.Println()
+		fmt.Println("=== 커스텀 설정 ===")
+		fmt.Println("아이템 종류 선택:")
+		fmt.Println("  1. 일반 (몽둥이, 망치, 검, 칼, 도끼)")
+		fmt.Println("  2. 특수 (칫솔, 우산, 단소 등)")
+		fmt.Print("선택 (1/2, 엔터=1): ")
+
+		typeInput, _ := reader.ReadString('\n')
+		typeInput = strings.TrimSpace(typeInput)
+
+		itemType := "normal"
+		if typeInput == "2" {
+			itemType = "special"
+		}
+
+		// 해당 타입의 추천 레벨
+		typeOptimal := GetOptimalLevelsByType()[itemType]
+		if typeOptimal == 0 {
+			typeOptimal = 10 // 기본값
+		}
+
+		fmt.Printf("목표 레벨 (엔터=%d): ", typeOptimal)
+		levelInput, _ := reader.ReadString('\n')
+		levelInput = strings.TrimSpace(levelInput)
+
+		if levelInput == "" {
+			targetLevel = typeOptimal
+		} else if level, err := strconv.Atoi(levelInput); err == nil && level >= 1 && level <= 20 {
+			targetLevel = level
+		} else {
+			targetLevel = typeOptimal
+		}
+
+		// 효율성 정보 표시
+		if eff := GetLevelEfficiency(targetLevel); eff != nil {
+			fmt.Printf("✅ 설정 완료: %s +%d (예상 %.0f G/분)\n", GetItemTypeLabel(itemType), targetLevel, eff.GoldPerMinute)
+		} else {
+			fmt.Printf("✅ 설정 완료: %s +%d\n", GetItemTypeLabel(itemType), targetLevel)
+		}
 	}
 
-	// 특수 아이템 목표 레벨 입력
-	fmt.Printf("특수 아이템 목표 레벨 (엔터=%d): ", serverSpecial)
-	inputSpecial, _ := reader.ReadString('\n')
-	inputSpecial = strings.TrimSpace(inputSpecial)
-
-	if inputSpecial == "" {
-		e.specialTargetLevel = serverSpecial
-	} else if level, err := strconv.Atoi(inputSpecial); err == nil && level >= 1 && level <= 20 {
-		e.specialTargetLevel = level
-	} else {
-		e.specialTargetLevel = serverSpecial
-	}
-
-	// 설정 확인
-	fmt.Println()
-	fmt.Println("✅ 목표 레벨 설정 완료:")
-	if eff := GetLevelEfficiency(e.normalTargetLevel); eff != nil {
-		fmt.Printf("   - 일반: +%d (예상 %.0f G/분)\n", e.normalTargetLevel, eff.GoldPerMinute)
-	} else {
-		fmt.Printf("   - 일반: +%d\n", e.normalTargetLevel)
-	}
-	if eff := GetLevelEfficiency(e.specialTargetLevel); eff != nil {
-		fmt.Printf("   - 특수: +%d (예상 %.0f G/분)\n", e.specialTargetLevel, eff.GoldPerMinute)
-	} else {
-		fmt.Printf("   - 특수: +%d\n", e.specialTargetLevel)
-	}
-
-	// 기존 targetLevel도 설정 (다른 곳에서 사용할 수 있으므로)
-	e.targetLevel = e.normalTargetLevel
+	// 모든 아이템 타입에 동일한 목표 레벨 적용
+	e.targetLevel = targetLevel
+	e.normalTargetLevel = targetLevel
+	e.specialTargetLevel = targetLevel
 
 	e.mode = ModeGoldMine
 	e.setupAndRun()
