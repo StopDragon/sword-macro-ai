@@ -36,9 +36,11 @@ type Engine struct {
 	mu      sync.Mutex
 
 	// 상태
-	currentLevel   int
-	targetLevel    int
-	cycleCount     int
+	currentLevel       int
+	targetLevel        int
+	normalTargetLevel  int // 일반 아이템 목표 레벨
+	specialTargetLevel int // 특수 아이템 목표 레벨
+	cycleCount         int
 	cycleStartTime time.Time
 	totalGold      int
 
@@ -216,14 +218,18 @@ func (e *Engine) runGoldMineMode() {
 	fmt.Println()
 	fmt.Println("=== 골드 채굴 설정 ===")
 
-	// 서버 통계 기반 최적 레벨 조회 (로딩 표시)
+	// 서버 통계 기반 타입별 최적 레벨 조회
 	fmt.Print("📊 서버 데이터 분석 중...")
-	optimalLevel, source := GetOptimalSellLevel(0)
+	optimalLevels := GetOptimalLevelsByType()
 	efficiencies := GetAllLevelEfficiencies()
 	fmt.Print("\r                              \r") // 로딩 메시지 지우기
 
-	fmt.Printf("📊 추천 판매 레벨: +%d (%s)\n", optimalLevel, source)
-	fmt.Printf("⚙️  현재 설정값: +%d\n", e.cfg.GoldMineTarget)
+	// 타입별 서버 추천 표시
+	serverNormal := optimalLevels["normal"]
+	serverSpecial := optimalLevels["special"]
+	fmt.Println("📊 서버 추천 판매 레벨 (실측 데이터 기반):")
+	fmt.Printf("   - 일반 아이템: +%d\n", serverNormal)
+	fmt.Printf("   - 특수 아이템: +%d\n", serverSpecial)
 
 	// 레벨별 효율성 표시 (서버 데이터가 있는 경우)
 	if len(efficiencies) > 0 {
@@ -247,29 +253,49 @@ func (e *Engine) runGoldMineMode() {
 		fmt.Println("   (★ = 최적 레벨)")
 	}
 
+	// 일반 아이템 목표 레벨 입력
 	fmt.Println()
-	// 최적 레벨(★)을 기본값으로 사용 (시간 효율 최대화)
-	defaultTarget := optimalLevel
-	fmt.Printf("목표 레벨 (엔터=%d): ", defaultTarget)
+	fmt.Printf("일반 아이템 목표 레벨 (엔터=%d): ", serverNormal)
+	inputNormal, _ := reader.ReadString('\n')
+	inputNormal = strings.TrimSpace(inputNormal)
 
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(input)
-
-	if input == "" {
-		e.targetLevel = defaultTarget
-	} else if level, err := strconv.Atoi(input); err == nil && level >= 1 && level <= 20 {
-		e.targetLevel = level
+	if inputNormal == "" {
+		e.normalTargetLevel = serverNormal
+	} else if level, err := strconv.Atoi(inputNormal); err == nil && level >= 1 && level <= 20 {
+		e.normalTargetLevel = level
 	} else {
-		e.targetLevel = defaultTarget
+		e.normalTargetLevel = serverNormal
 	}
 
-	// 선택한 레벨의 효율성 정보 표시
-	if eff := GetLevelEfficiency(e.targetLevel); eff != nil {
-		fmt.Printf("✅ 목표 레벨: +%d (예상 %.0f G/분, 성공률 %.1f%%)\n",
-			e.targetLevel, eff.GoldPerMinute, eff.SuccessProb)
+	// 특수 아이템 목표 레벨 입력
+	fmt.Printf("특수 아이템 목표 레벨 (엔터=%d): ", serverSpecial)
+	inputSpecial, _ := reader.ReadString('\n')
+	inputSpecial = strings.TrimSpace(inputSpecial)
+
+	if inputSpecial == "" {
+		e.specialTargetLevel = serverSpecial
+	} else if level, err := strconv.Atoi(inputSpecial); err == nil && level >= 1 && level <= 20 {
+		e.specialTargetLevel = level
 	} else {
-		fmt.Printf("✅ 목표 레벨: +%d\n", e.targetLevel)
+		e.specialTargetLevel = serverSpecial
 	}
+
+	// 설정 확인
+	fmt.Println()
+	fmt.Println("✅ 목표 레벨 설정 완료:")
+	if eff := GetLevelEfficiency(e.normalTargetLevel); eff != nil {
+		fmt.Printf("   - 일반: +%d (예상 %.0f G/분)\n", e.normalTargetLevel, eff.GoldPerMinute)
+	} else {
+		fmt.Printf("   - 일반: +%d\n", e.normalTargetLevel)
+	}
+	if eff := GetLevelEfficiency(e.specialTargetLevel); eff != nil {
+		fmt.Printf("   - 특수: +%d (예상 %.0f G/분)\n", e.specialTargetLevel, eff.GoldPerMinute)
+	} else {
+		fmt.Printf("   - 특수: +%d\n", e.specialTargetLevel)
+	}
+
+	// 기존 targetLevel도 설정 (다른 곳에서 사용할 수 있으므로)
+	e.targetLevel = e.normalTargetLevel
 
 	e.mode = ModeGoldMine
 	e.setupAndRun()
@@ -920,19 +946,25 @@ func (e *Engine) loopGoldMine() {
 	startGold := e.readCurrentGold()
 	e.telem.InitSession(startGold)
 
-	// 타입별 최적 판매 레벨 조회 (서버 데이터 기반)
-	optimalLevels := GetOptimalLevelsByType()
-	normalTarget := optimalLevels["normal"]
-	specialTarget := optimalLevels["special"]
+	// 사용자가 설정한 타입별 목표 레벨 사용
+	normalTarget := e.normalTargetLevel
+	specialTarget := e.specialTargetLevel
+
+	// 목표 레벨이 설정되지 않은 경우 폴백 (기존 targetLevel 또는 기본값 10)
 	if normalTarget == 0 {
-		normalTarget = e.targetLevel // 폴백: 사용자 설정 목표 레벨
+		normalTarget = e.targetLevel
+		if normalTarget == 0 {
+			normalTarget = 10
+		}
 	}
 	if specialTarget == 0 {
 		specialTarget = e.targetLevel
+		if specialTarget == 0 {
+			specialTarget = 10
+		}
 	}
-	fmt.Printf("📊 타입별 최적 판매 레벨 (서버 기준):\n")
-	fmt.Printf("   - 일반(normal): %d강\n", normalTarget)
-	fmt.Printf("   - 특수(special): %d강\n", specialTarget)
+
+	fmt.Printf("🎯 목표 레벨: 일반 +%d / 특수 +%d\n", normalTarget, specialTarget)
 
 	overlay.UpdateStatus("💰 골드 채굴 모드\n목표: 일반 +%d / 특수 +%d\n사이클: 0\n수익: 0G", normalTarget, specialTarget)
 
