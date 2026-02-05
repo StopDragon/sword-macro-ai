@@ -1250,12 +1250,95 @@ func handleOptimalSellPoint(w http.ResponseWriter, r *http.Request) {
 		"trash":   calcTypeOptimal("trash"),
 	}
 
+	// 타입별 레벨 효율 테이블 계산
+	type TypeLevelEfficiency struct {
+		Level              int     `json:"level"`
+		AvgPrice           int     `json:"avg_price"`
+		ExpectedTrials     float64 `json:"expected_trials"`
+		ExpectedTimeSecond float64 `json:"expected_time_second"`
+		SuccessProb        float64 `json:"success_prob"`
+		GoldPerMinute      float64 `json:"gold_per_minute"`
+		SampleSize         int     `json:"sample_size"`
+		Recommendation     string  `json:"recommendation"`
+	}
+
+	calcTypeEfficiencies := func(itemType string) []TypeLevelEfficiency {
+		var typeEffs []TypeLevelEfficiency
+		bestLvl := 10
+		bestGpm := 0.0
+
+		// 해당 타입의 레벨별 샘플 수 계산
+		getSampleSize := func(level int) int {
+			if typeData, ok := typeLevelPrices[itemType]; ok {
+				if entry, ok := typeData[level]; ok {
+					return entry.count
+				}
+			}
+			return 0
+		}
+
+		// 레벨 5-15 범위에서 분석
+		for level := 5; level <= 15; level++ {
+			price := getAvgPriceForType(itemType, level)
+			timeSeconds := calcExpectedTimeForType(itemType, level)
+			sampleSize := getSampleSize(level)
+
+			// 성공 확률 계산 (타입별)
+			successProb := 1.0
+			expectedTrials := 0.0
+			for lvl := 0; lvl < level; lvl++ {
+				rate := getEnhanceRateForType(itemType, lvl)
+				successProb *= rate
+				if rate > 0 {
+					expectedTrials += 1.0 / rate
+				}
+			}
+
+			gpm := 0.0
+			if timeSeconds > 0 {
+				gpm = (float64(price) * successProb) / (timeSeconds / 60.0)
+			}
+
+			if gpm > bestGpm {
+				bestGpm = gpm
+				bestLvl = level
+			}
+
+			typeEffs = append(typeEffs, TypeLevelEfficiency{
+				Level:              level,
+				AvgPrice:           price,
+				ExpectedTrials:     expectedTrials,
+				ExpectedTimeSecond: timeSeconds,
+				SuccessProb:        successProb * 100,
+				GoldPerMinute:      gpm,
+				SampleSize:         sampleSize,
+				Recommendation:     "",
+			})
+		}
+
+		// 최적 레벨에 추천 표시
+		for i := range typeEffs {
+			if typeEffs[i].Level == bestLvl {
+				typeEffs[i].Recommendation = "optimal"
+			}
+		}
+
+		return typeEffs
+	}
+
+	levelEfficienciesByType := map[string][]TypeLevelEfficiency{
+		"normal":  calcTypeEfficiencies("normal"),
+		"special": calcTypeEfficiencies("special"),
+		"trash":   calcTypeEfficiencies("trash"),
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"optimal_level":      bestLevel,
-		"optimal_gpm":        bestGPM,
-		"level_efficiencies": efficiencies,
-		"by_type":            typeOptimalLevels,
-		"note":               "gold_per_minute = (avg_price × success_prob) / (expected_time / 60)",
+		"optimal_level":              bestLevel,
+		"optimal_gpm":                bestGPM,
+		"level_efficiencies":         efficiencies,
+		"by_type":                    typeOptimalLevels,
+		"level_efficiencies_by_type": levelEfficienciesByType,
+		"note":                       "gold_per_minute = (avg_price × success_prob) / (expected_time / 60)",
 	})
 }
 

@@ -70,6 +70,18 @@ type LevelEfficiency struct {
 	Recommendation     string  `json:"recommendation"`
 }
 
+// TypeLevelEfficiency 타입별 레벨 효율성 데이터 (샘플 수 포함)
+type TypeLevelEfficiency struct {
+	Level              int     `json:"level"`
+	AvgPrice           int     `json:"avg_price"`
+	ExpectedTrials     float64 `json:"expected_trials"`
+	ExpectedTimeSecond float64 `json:"expected_time_second"`
+	SuccessProb        float64 `json:"success_prob"`
+	GoldPerMinute      float64 `json:"gold_per_minute"`
+	SampleSize         int     `json:"sample_size"`
+	Recommendation     string  `json:"recommendation"`
+}
+
 // TypeOptimal 타입별 최적 판매 데이터
 type TypeOptimal struct {
 	Type           string  `json:"type"`
@@ -82,11 +94,12 @@ type TypeOptimal struct {
 
 // OptimalSellData 최적 판매 시점 데이터
 type OptimalSellData struct {
-	OptimalLevel      int                    `json:"optimal_level"`
-	OptimalGPM        float64                `json:"optimal_gpm"`
-	LevelEfficiencies []LevelEfficiency      `json:"level_efficiencies"`
-	ByType            map[string]TypeOptimal `json:"by_type"` // 타입별 최적 레벨
-	Note              string                 `json:"note"`
+	OptimalLevel            int                                `json:"optimal_level"`
+	OptimalGPM              float64                            `json:"optimal_gpm"`
+	LevelEfficiencies       []LevelEfficiency                  `json:"level_efficiencies"`
+	ByType                  map[string]TypeOptimal             `json:"by_type"`                    // 타입별 최적 레벨
+	LevelEfficienciesByType map[string][]TypeLevelEfficiency   `json:"level_efficiencies_by_type"` // 타입별 효율 테이블
+	Note                    string                             `json:"note"`
 }
 
 
@@ -381,6 +394,25 @@ func GetAllLevelEfficiencies() []LevelEfficiency {
 		return nil
 	}
 	return data.LevelEfficiencies
+}
+
+// GetLevelEfficienciesByType 타입별 레벨 효율성 데이터 조회
+// itemType: "normal", "special", "trash"
+func GetLevelEfficienciesByType(itemType string) []TypeLevelEfficiency {
+	data, err := FetchOptimalSellData()
+	if err != nil || data == nil || data.LevelEfficienciesByType == nil {
+		return nil
+	}
+	return data.LevelEfficienciesByType[itemType]
+}
+
+// GetAllLevelEfficienciesByType 모든 타입의 레벨 효율성 데이터 조회
+func GetAllLevelEfficienciesByType() map[string][]TypeLevelEfficiency {
+	data, err := FetchOptimalSellData()
+	if err != nil || data == nil {
+		return nil
+	}
+	return data.LevelEfficienciesByType
 }
 
 // GetOptimalLevelByType 타입별 최적 판매 레벨 조회

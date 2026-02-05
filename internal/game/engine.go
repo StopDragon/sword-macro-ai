@@ -281,6 +281,34 @@ func (e *Engine) runGoldMineMode() {
 			itemType = "special"
 		}
 
+		// 해당 타입의 효율 테이블 표시
+		typeEffs := GetLevelEfficienciesByType(itemType)
+		if len(typeEffs) > 0 {
+			fmt.Printf("\n📈 %s 레벨별 효율:\n", GetItemTypeLabel(itemType))
+			fmt.Println("   레벨 |  판매가  | 성공률 | G/분    | 샘플")
+			fmt.Println("   -----|---------|--------|---------|------")
+			for _, eff := range typeEffs {
+				marker := "  "
+				if eff.Recommendation == "optimal" {
+					marker = "★ "
+				}
+				sampleStr := "-"
+				if eff.SampleSize > 0 {
+					sampleStr = fmt.Sprintf("%d", eff.SampleSize)
+				}
+				fmt.Printf("   %s+%2d | %7s | %5.1f%% | %7s | %s\n",
+					marker,
+					eff.Level,
+					FormatGold(eff.AvgPrice),
+					eff.SuccessProb,
+					FormatGold(int(eff.GoldPerMinute)),
+					sampleStr,
+				)
+			}
+			fmt.Println("   (★ = 최적 레벨, 샘플=실측 데이터 수)")
+			fmt.Println()
+		}
+
 		// 해당 타입의 추천 레벨
 		typeOptimal := GetOptimalLevelsByType()[itemType]
 		if typeOptimal == 0 {
