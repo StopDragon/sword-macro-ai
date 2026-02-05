@@ -38,6 +38,7 @@ type Engine struct {
 	// 상태
 	currentLevel       int
 	targetLevel        int
+	trashTargetLevel   int // 쓰레기 아이템 목표 레벨
 	normalTargetLevel  int // 일반 아이템 목표 레벨
 	specialTargetLevel int // 특수 아이템 목표 레벨
 	cycleCount         int
@@ -218,136 +219,176 @@ func (e *Engine) runGoldMineMode() {
 	fmt.Println()
 	fmt.Println("=== 골드 채굴 설정 ===")
 
-	// 서버 통계 기반 최적 레벨 조회
+	// 서버 통계 기반 타입별 최적 레벨 조회
 	fmt.Print("📊 서버 데이터 분석 중...")
-	optimalLevel, source := GetOptimalSellLevel(0)
-	efficiencies := GetAllLevelEfficiencies()
+	typeEffsMap := GetAllLevelEfficienciesByType()
+	optimalByType := GetOptimalLevelsByType()
 	fmt.Print("\r                              \r") // 로딩 메시지 지우기
 
-	// 최적 레벨의 효율성 정보
-	var optimalGPM float64
-	if eff := GetLevelEfficiency(optimalLevel); eff != nil {
-		optimalGPM = eff.GoldPerMinute
+	// 타입별 최적 GPM 조회
+	typeOptimalGPM := make(map[string]float64)
+	for itemType, effs := range typeEffsMap {
+		optLevel := optimalByType[itemType]
+		for _, eff := range effs {
+			if eff.Level == optLevel {
+				typeOptimalGPM[itemType] = eff.GoldPerMinute
+				break
+			}
+		}
 	}
 
-	// 레벨별 효율성 표시 (서버 데이터가 있는 경우)
-	if len(efficiencies) > 0 {
-		fmt.Println("📈 레벨별 시간 효율 (G/분):")
-		fmt.Println("   레벨 |  판매가  | 성공률 | G/분")
-		fmt.Println("   -----|---------|--------|-------")
-		for _, eff := range efficiencies {
-			marker := "  "
-			if eff.Recommendation == "optimal" {
-				marker = "★ "
+	// 레벨별 종류별 효율성 표시 (서버 데이터 있을 때만)
+	if len(typeEffsMap) > 0 {
+		fmt.Println("📈 레벨별 종류별 시간 효율 (G/분):")
+		fmt.Println("   레벨 |  종류  |  판매가   | 성공률 |  G/분  | 샘플")
+		fmt.Println("   -----|--------|----------|--------|--------|------")
+
+		// 레벨 5~15 범위로 표시
+		for level := 5; level <= 15; level++ {
+			for _, itemType := range []string{"trash", "normal", "special"} {
+				effs := typeEffsMap[itemType]
+				var found *TypeLevelEfficiency
+				for i := range effs {
+					if effs[i].Level == level {
+						found = &effs[i]
+						break
+					}
+				}
+
+				// 데이터 없는 레벨/타입은 스킵
+				if found == nil || found.SampleSize == 0 {
+					continue
+				}
+
+				typeLabel := map[string]string{"trash": "쓰레기", "normal": "일반", "special": "특수"}[itemType]
+				marker := "  "
+				if found.Recommendation == "optimal" {
+					marker = "★ "
+				}
+
+				fmt.Printf("   %s+%2d | %-4s | %8s | %5.1f%% | %6.0f | %d\n",
+					marker, level, typeLabel,
+					FormatGold(found.AvgPrice), found.SuccessProb,
+					found.GoldPerMinute, found.SampleSize)
 			}
-			fmt.Printf("   %s+%2d | %7s | %5.1f%% | %s\n",
-				marker,
-				eff.Level,
-				FormatGold(eff.AvgPrice),
-				eff.SuccessProb,
-				FormatGold(int(eff.GoldPerMinute)),
-			)
 		}
-		fmt.Println("   (★ = 최적 레벨)")
+		fmt.Println("   (★ = 해당 종류 최적 레벨)")
 		fmt.Println()
 	}
 
-	// 최적 전략 표시 및 사용 여부 확인
-	fmt.Printf("📊 최적 전략: +%d 판매 (예상 %.0f G/분, %s)\n", optimalLevel, optimalGPM, source)
+	// 타입별 최적 전략 표시
+	fmt.Println("📊 종류별 최적 전략:")
+	for _, itemType := range []string{"trash", "normal", "special"} {
+		typeLabel := map[string]string{"trash": "쓰레기", "normal": "일반", "special": "특수"}[itemType]
+		optLevel := optimalByType[itemType]
+		if optLevel == 0 {
+			optLevel = map[string]int{"trash": 0, "normal": 10, "special": 10}[itemType]
+		}
+		gpm := typeOptimalGPM[itemType]
+		if gpm > 0 {
+			fmt.Printf("   %s: +%d 판매 (%.0f G/분)\n", typeLabel, optLevel, gpm)
+		} else {
+			fmt.Printf("   %s: +%d 판매\n", typeLabel, optLevel)
+		}
+	}
+	fmt.Println()
+
 	fmt.Print("추천 설정을 사용하시겠습니까? (Y/n): ")
 	useRecommended, _ := reader.ReadString('\n')
 	useRecommended = strings.TrimSpace(strings.ToLower(useRecommended))
 
-	var targetLevel int
+	var trashTarget, normalTarget, specialTarget int
 
 	if useRecommended == "" || useRecommended == "y" || useRecommended == "yes" {
-		// 추천 설정 사용
-		targetLevel = optimalLevel
-		fmt.Printf("✅ 추천 설정 적용: +%d 판매\n", targetLevel)
+		// 추천 설정 사용 - 서버 추천값 그대로 사용 (0이면 바로 판매)
+		trashTarget = optimalByType["trash"]
+		normalTarget = optimalByType["normal"]
+		specialTarget = optimalByType["special"]
+		fmt.Println("✅ 추천 설정 적용:")
+		for _, item := range []struct {
+			name   string
+			target int
+		}{{"쓰레기", trashTarget}, {"일반", normalTarget}, {"특수", specialTarget}} {
+			if item.target == 0 {
+				fmt.Printf("   %s: 바로 판매 (강화 안함)\n", item.name)
+			} else {
+				fmt.Printf("   %s: +%d까지 강화 후 판매\n", item.name, item.target)
+			}
+		}
 	} else {
 		// 커스텀 설정
 		fmt.Println()
 		fmt.Println("=== 커스텀 설정 ===")
-		fmt.Println("아이템 종류 선택:")
-		fmt.Println("  1. 일반 (몽둥이, 망치, 검, 칼, 도끼)")
-		fmt.Println("  2. 특수 (칫솔, 우산, 단소 등)")
-		fmt.Print("선택 (1/2, 엔터=1): ")
 
-		typeInput, _ := reader.ReadString('\n')
-		typeInput = strings.TrimSpace(typeInput)
-
-		itemType := "normal"
-		if typeInput == "2" {
-			itemType = "special"
+		// 쓰레기 설정 (GPM 정보 표시)
+		trashGPM := typeOptimalGPM["trash"]
+		if trashGPM > 0 {
+			fmt.Printf("쓰레기 최적: +%d (%.0f G/분)\n", optimalByType["trash"], trashGPM)
 		}
-
-		// 해당 타입의 효율 테이블 표시
-		typeEffs := GetLevelEfficienciesByType(itemType)
-		if len(typeEffs) > 0 {
-			fmt.Printf("\n📈 %s 레벨별 효율:\n", GetItemTypeLabel(itemType))
-			fmt.Println("   레벨 |  판매가  | 성공률 | G/분    | 샘플")
-			fmt.Println("   -----|---------|--------|---------|------")
-			for _, eff := range typeEffs {
-				marker := "  "
-				if eff.Recommendation == "optimal" {
-					marker = "★ "
-				}
-				sampleStr := "-"
-				if eff.SampleSize > 0 {
-					sampleStr = fmt.Sprintf("%d", eff.SampleSize)
-				}
-				fmt.Printf("   %s+%2d | %7s | %5.1f%% | %7s | %s\n",
-					marker,
-					eff.Level,
-					FormatGold(eff.AvgPrice),
-					eff.SuccessProb,
-					FormatGold(int(eff.GoldPerMinute)),
-					sampleStr,
-				)
-			}
-			fmt.Println("   (★ = 최적 레벨, 샘플=실측 데이터 수)")
-			fmt.Println()
-		}
-
-		// 해당 타입의 추천 레벨
-		typeOptimal := GetOptimalLevelsByType()[itemType]
-		if typeOptimal == 0 {
-			typeOptimal = 10 // 기본값
-		}
-
-		fmt.Printf("목표 레벨 (엔터=%d): ", typeOptimal)
-		levelInput, _ := reader.ReadString('\n')
-		levelInput = strings.TrimSpace(levelInput)
-
-		if levelInput == "" {
-			targetLevel = typeOptimal
-		} else if level, err := strconv.Atoi(levelInput); err == nil && level >= 1 && level <= 20 {
-			targetLevel = level
+		fmt.Print("쓰레기 목표 레벨 (0=바로 판매, 엔터=0): ")
+		trashInput, _ := reader.ReadString('\n')
+		trashInput = strings.TrimSpace(trashInput)
+		if trashInput == "" {
+			trashTarget = 0
+		} else if level, err := strconv.Atoi(trashInput); err == nil && level >= 0 && level <= 15 {
+			trashTarget = level
 		} else {
-			targetLevel = typeOptimal
+			trashTarget = 0
 		}
 
-		// 효율성 정보 표시 (타입별 효율 데이터 우선 사용 - 위에서 이미 가져온 typeEffs 재사용)
-		var gpmStr string
-		for _, eff := range typeEffs {
-			if eff.Level == targetLevel {
-				gpmStr = fmt.Sprintf(" (예상 %.0f G/분)", eff.GoldPerMinute)
-				break
+		// 일반 설정 (GPM 정보 표시) - 서버값 그대로 사용
+		defaultNormal := optimalByType["normal"]
+		normalGPM := typeOptimalGPM["normal"]
+		if normalGPM > 0 {
+			fmt.Printf("일반 최적: +%d (%.0f G/분)\n", defaultNormal, normalGPM)
+		}
+		fmt.Printf("일반 목표 레벨 (0=바로 판매, 엔터=%d): ", defaultNormal)
+		normalInput, _ := reader.ReadString('\n')
+		normalInput = strings.TrimSpace(normalInput)
+		if normalInput == "" {
+			normalTarget = defaultNormal
+		} else if level, err := strconv.Atoi(normalInput); err == nil && level >= 0 && level <= 20 {
+			normalTarget = level
+		} else {
+			normalTarget = defaultNormal
+		}
+
+		// 특수 설정 (GPM 정보 표시) - 서버값 그대로 사용
+		defaultSpecial := optimalByType["special"]
+		specialGPM := typeOptimalGPM["special"]
+		if specialGPM > 0 {
+			fmt.Printf("특수 최적: +%d (%.0f G/분)\n", defaultSpecial, specialGPM)
+		}
+		fmt.Printf("특수 목표 레벨 (0=바로 판매, 엔터=%d): ", defaultSpecial)
+		specialInput, _ := reader.ReadString('\n')
+		specialInput = strings.TrimSpace(specialInput)
+		if specialInput == "" {
+			specialTarget = defaultSpecial
+		} else if level, err := strconv.Atoi(specialInput); err == nil && level >= 0 && level <= 20 {
+			specialTarget = level
+		} else {
+			specialTarget = defaultSpecial
+		}
+
+		fmt.Println()
+		fmt.Println("✅ 커스텀 설정 적용:")
+		for _, item := range []struct {
+			name   string
+			target int
+		}{{"쓰레기", trashTarget}, {"일반", normalTarget}, {"특수", specialTarget}} {
+			if item.target == 0 {
+				fmt.Printf("   %s: 바로 판매\n", item.name)
+			} else {
+				fmt.Printf("   %s: +%d까지 강화 후 판매\n", item.name, item.target)
 			}
 		}
-		// 타입별 데이터 없으면 전체 데이터 사용
-		if gpmStr == "" {
-			if eff := GetLevelEfficiency(targetLevel); eff != nil {
-				gpmStr = fmt.Sprintf(" (예상 %.0f G/분)", eff.GoldPerMinute)
-			}
-		}
-		fmt.Printf("✅ 설정 완료: %s +%d%s\n", GetItemTypeLabel(itemType), targetLevel, gpmStr)
 	}
 
-	// 모든 아이템 타입에 동일한 목표 레벨 적용
-	e.targetLevel = targetLevel
-	e.normalTargetLevel = targetLevel
-	e.specialTargetLevel = targetLevel
+	// 타입별 목표 레벨 저장
+	e.trashTargetLevel = trashTarget
+	e.normalTargetLevel = normalTarget
+	e.specialTargetLevel = specialTarget
+	e.targetLevel = normalTarget // 기본 목표는 일반 기준
 
 	e.mode = ModeGoldMine
 	e.setupAndRun()
@@ -1023,26 +1064,24 @@ func (e *Engine) loopGoldMine() {
 	e.telem.InitSession(startGold)
 
 	// 사용자가 설정한 타입별 목표 레벨 사용
+	trashTarget := e.trashTargetLevel   // 쓰레기 목표 (0이면 바로 판매)
 	normalTarget := e.normalTargetLevel
 	specialTarget := e.specialTargetLevel
 
-	// 목표 레벨이 설정되지 않은 경우 폴백 (기존 targetLevel 또는 기본값 10)
-	if normalTarget == 0 {
-		normalTarget = e.targetLevel
-		if normalTarget == 0 {
-			normalTarget = 10
-		}
-	}
-	if specialTarget == 0 {
-		specialTarget = e.targetLevel
-		if specialTarget == 0 {
-			specialTarget = 10
-		}
-	}
+	// 0은 유효한 값 (바로 판매) - 폴백 없음, 서버값 그대로 사용
 
-	fmt.Printf("🎯 목표 레벨: 일반 +%d / 특수 +%d\n", normalTarget, specialTarget)
+	// 목표 레벨 표시 (0이면 "바로 판매")
+	formatTarget := func(target int) string {
+		if target == 0 {
+			return "바로 판매"
+		}
+		return fmt.Sprintf("+%d", target)
+	}
+	fmt.Printf("🎯 목표 레벨: 쓰레기 %s / 일반 %s / 특수 %s\n",
+		formatTarget(trashTarget), formatTarget(normalTarget), formatTarget(specialTarget))
 
-	overlay.UpdateStatus("💰 골드 채굴 모드\n목표: 일반 +%d / 특수 +%d\n사이클: 0\n수익: 0G", normalTarget, specialTarget)
+	overlay.UpdateStatus("💰 골드 채굴 모드\n목표: 쓰레/일반/특수\n%s / %s / %s\n사이클: 0 | 수익: 0G",
+		formatTarget(trashTarget), formatTarget(normalTarget), formatTarget(specialTarget))
 
 	// 시작 시 프로필 정보 표시 (Run()에서 이미 조회한 sessionProfile 사용)
 	// 중복 /프로필 전송 방지
@@ -1168,7 +1207,7 @@ func (e *Engine) loopGoldMine() {
 		if itemType == "special" {
 			cycleTarget = specialTarget
 		} else if itemType == "trash" {
-			cycleTarget = 0 // 쓰레기는 바로 판매
+			cycleTarget = trashTarget // 쓰레기 목표 (0이면 바로 판매)
 		}
 
 		// 2. 목표 도달 확인 (타입별 목표 기준)

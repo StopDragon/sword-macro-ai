@@ -281,7 +281,7 @@ func CalcOptimalSellLevel(currentGold int) int {
 	prices := GetAllSwordPrices()
 
 	if rates == nil || prices == nil {
-		return 10 // 기본값
+		return 0 // 데이터 없으면 바로 판매
 	}
 
 	// 각 목표 레벨별 기대 수익 계산
@@ -433,10 +433,12 @@ func GetOptimalLevelByType(itemType string) (int, bool) {
 
 // GetOptimalLevelsByType 모든 타입의 최적 판매 레벨 조회
 // 반환: map[타입]최적레벨 (예: {"normal": 10, "special": 12})
+// 서버 데이터 없으면 0 반환 (바로 판매)
 func GetOptimalLevelsByType() map[string]int {
+	// 기본값: 모두 0 (서버 데이터 없으면 바로 판매)
 	result := map[string]int{
-		"normal":  10,
-		"special": 10,
+		"normal":  0,
+		"special": 0,
 		"trash":   0,
 	}
 
@@ -445,25 +447,19 @@ func GetOptimalLevelsByType() map[string]int {
 		return result
 	}
 
+	// 서버 값으로 업데이트 (0도 유효한 값이므로 그대로 사용)
 	for itemType, typeData := range data.ByType {
-		if typeData.OptimalLevel > 0 {
-			result[itemType] = typeData.OptimalLevel
-		}
+		result[itemType] = typeData.OptimalLevel
 	}
 
 	return result
 }
 
 // getDefaultOptimalLevel 타입별 기본 최적 레벨
+// 서버 데이터가 없으면 0 반환 (바로 판매 = 강화 안함)
 func getDefaultOptimalLevel(itemType string) int {
-	switch itemType {
-	case "trash":
-		return 0 // 쓰레기는 강화 안함
-	case "special":
-		return 10 // 특수 아이템 기본값
-	default:
-		return 10 // 일반 아이템 기본값
-	}
+	// 데이터 없으면 모두 0 (바로 판매)
+	return 0
 }
 
 // FormatGold 골드를 정확한 콤마 표기로 포맷 (예: 184,331,258)
