@@ -100,6 +100,8 @@ type EnhanceResult struct {
 // 기존 enhanceToTargetWithLevel의 개선 버전
 func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult {
 	currentLevel := startLevel
+	// 타입 기반 강화 통계용 (normal/special/trash)
+	itemType := DetermineItemType(itemName)
 
 	for currentLevel < e.targetLevel && e.running {
 		if e.checkStop() {
@@ -128,6 +130,9 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 
 		// 파괴 확인
 		if state.LastResult == "destroy" {
+			// 타입+레벨별 강화 통계 기록
+			e.telem.RecordEnhanceWithType(itemType, currentLevel, "destroy")
+
 			result := EnhanceResult{FinalLevel: currentLevel, Success: false, Destroyed: true}
 
 			// 파괴 시 새 검 정보 추출
@@ -160,6 +165,8 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 				currentLevel++
 				fmt.Printf("  ⚔️ 강화 성공! +%d 도달 (계산값)\n", currentLevel)
 			}
+			// 타입+레벨별 강화 통계 기록 (강화 전 레벨 기준)
+			e.telem.RecordEnhanceWithType(itemType, currentLevel-1, "success")
 		} else if state.LastResult == "hold" {
 			// 유지 시에도 ResultLevel 확인 (현재 레벨 동기화)
 			// 채팅에 성공(+9→+10)과 유지(+10)가 동시에 잡힐 때
@@ -168,6 +175,8 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 				currentLevel = state.ResultLevel
 			}
 			fmt.Printf("  💫 강화 유지 (현재 +%d)\n", currentLevel)
+			// 타입+레벨별 강화 통계 기록
+			e.telem.RecordEnhanceWithType(itemType, currentLevel, "hold")
 		} else if state.LastResult == "destroy" {
 			// 파괴는 위에서 처리됨, 여기 오면 안됨
 			fmt.Printf("  [경고] destroy가 fallback에서 감지됨\n")
@@ -227,10 +236,11 @@ func (e *Engine) ReportSwordComplete() {
 }
 
 // ReportGoldMineCycle 골드 채굴 사이클 완료 보고
-func (e *Engine) ReportGoldMineCycle(itemName string, level, goldEarned, currentGold, enhanceCost int, cycleTimeSec float64) {
+// itemType: "normal", "special", "trash" (타입별 가격 통계용)
+func (e *Engine) ReportGoldMineCycle(itemType string, level, goldEarned, currentGold, enhanceCost int, cycleTimeSec float64) {
 	e.telem.RecordCycle(true)
 	e.telem.RecordGold(goldEarned)
-	e.telem.RecordSaleWithSword(itemName, level, goldEarned)
+	e.telem.RecordSaleWithType(itemType, level, goldEarned)
 	e.telem.RecordGoldChange(currentGold)
 	e.telem.RecordEnhanceCost(enhanceCost)
 	e.telem.RecordCycleTime(cycleTimeSec)

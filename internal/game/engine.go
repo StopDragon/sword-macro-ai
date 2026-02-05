@@ -658,10 +658,13 @@ func (e *Engine) loopEnhance() {
 			continue
 		}
 
+		// 타입 기반 강화 통계용 (normal/special/trash)
+		itemType := DetermineItemType(swordName)
+
 		switch state.LastResult {
 		case "destroy":
 			e.sessionStats.enhanceDestroy++
-			e.telem.RecordEnhanceWithSword(swordName, currentLevel, "destroy")
+			e.telem.RecordEnhanceWithType(itemType, currentLevel, "destroy")
 			fmt.Printf("  💥 +%d에서 파괴!\n", currentLevel)
 			overlay.UpdateStatus("⚔️ 강화 중\n💥 +%d 파괴!\n\n📋 판단: 새 검으로 재시작", currentLevel)
 
@@ -680,7 +683,7 @@ func (e *Engine) loopEnhance() {
 			} else {
 				currentLevel++
 			}
-			e.telem.RecordEnhanceWithSword(swordName, currentLevel-1, "success")
+			e.telem.RecordEnhanceWithType(itemType, currentLevel-1, "success")
 			fmt.Printf("  ⚔️ 강화 성공! +%d\n", currentLevel)
 			overlay.UpdateStatus("⚔️ 강화 중\n현재: +%d → 목표: +%d\n\n📋 판단: 성공!", currentLevel, e.targetLevel)
 
@@ -689,7 +692,7 @@ func (e *Engine) loopEnhance() {
 			if state.ResultLevel > 0 && state.ResultLevel != currentLevel {
 				currentLevel = state.ResultLevel
 			}
-			e.telem.RecordEnhanceWithSword(swordName, currentLevel, "hold")
+			e.telem.RecordEnhanceWithType(itemType, currentLevel, "hold")
 			fmt.Printf("  💫 +%d 유지\n", currentLevel)
 
 		default:
@@ -879,13 +882,19 @@ func (e *Engine) loopSpecial() {
 			if displayName == "" {
 				displayName = GetItemTypeLabel(state.ItemType)
 			}
+			// 현재 레벨 추출 (판매 통계용)
+			saleLevel := e.ExtractCurrentLevel(state)
 			overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n쓰레기: %d회\n🗑️ %s\n\n📋 판단: %s → 판매", e.sessionStats.trashCount, displayName, GetItemTypeLabel(state.ItemType))
 			fmt.Printf("  🗑️ [%s] → /판매\n", displayName)
 
 			// /판매로 새 아이템 받기
 			e.sendCommand("/판매")
 			// 판매 응답 대기 (응답 없이 다음 /강화 보내면 꼬임)
-			e.readChatTextWaitForChange(5 * time.Second)
+			saleText := e.readChatTextWaitForChange(5 * time.Second)
+			// 판매 통계 기록 (타입+레벨별)
+			if saleResult := ExtractSaleResult(saleText); saleResult != nil && saleResult.SaleGold > 0 {
+				e.telem.RecordSaleWithType(state.ItemType, saleLevel, saleResult.SaleGold)
+			}
 			time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 			continue
 		}
@@ -893,9 +902,15 @@ func (e *Engine) loopSpecial() {
 		// 5. 예상치 못한 타입 - 안전하게 판매 처리 (무한 강화 방지)
 		fmt.Printf("  ❓ 예상치 못한 아이템 타입: [%s] - 판매 처리\n", state.ItemType)
 		overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n❓ 타입 불명 → 판매")
+		// 현재 레벨 추출 (판매 통계용)
+		unknownSaleLevel := e.ExtractCurrentLevel(state)
 		e.sendCommand("/판매")
 		// 판매 응답 대기
-		e.readChatTextWaitForChange(5 * time.Second)
+		unknownSaleText := e.readChatTextWaitForChange(5 * time.Second)
+		// 판매 통계 기록 (타입+레벨별) - unknown 타입도 기록
+		if saleResult := ExtractSaleResult(unknownSaleText); saleResult != nil && saleResult.SaleGold > 0 {
+			e.telem.RecordSaleWithType("normal", unknownSaleLevel, saleResult.SaleGold) // unknown은 normal로 처리
+		}
 		time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 	}
 }
@@ -904,7 +919,22 @@ func (e *Engine) loopGoldMine() {
 	// v3: 세션 초기화
 	startGold := e.readCurrentGold()
 	e.telem.InitSession(startGold)
-	overlay.UpdateStatus("💰 골드 채굴 모드\n목표: +%d\n사이클: 0\n수익: 0G", e.targetLevel)
+
+	// 타입별 최적 판매 레벨 조회 (서버 데이터 기반)
+	optimalLevels := GetOptimalLevelsByType()
+	normalTarget := optimalLevels["normal"]
+	specialTarget := optimalLevels["special"]
+	if normalTarget == 0 {
+		normalTarget = e.targetLevel // 폴백: 사용자 설정 목표 레벨
+	}
+	if specialTarget == 0 {
+		specialTarget = e.targetLevel
+	}
+	fmt.Printf("📊 타입별 최적 판매 레벨 (서버 기준):\n")
+	fmt.Printf("   - 일반(normal): %d강\n", normalTarget)
+	fmt.Printf("   - 특수(special): %d강\n", specialTarget)
+
+	overlay.UpdateStatus("💰 골드 채굴 모드\n목표: 일반 +%d / 특수 +%d\n사이클: 0\n수익: 0G", normalTarget, specialTarget)
 
 	// 시작 시 프로필 정보 표시 (Run()에서 이미 조회한 sessionProfile 사용)
 	// 중복 /프로필 전송 방지
@@ -915,23 +945,33 @@ func (e *Engine) loopGoldMine() {
 		itemType := DetermineItemType(e.sessionProfile.SwordName)
 		fmt.Printf("   아이템 타입: %s\n", GetItemTypeLabel(itemType))
 
-		// 이미 목표 달성한 경우 바로 판매 (일반 아이템만)
-		if e.IsTargetReached(e.sessionProfile.Level) {
+		// 타입별 목표 레벨 결정
+		currentTypeTarget := normalTarget
+		if itemType == "special" {
+			currentTypeTarget = specialTarget
+		}
+
+		// 이미 목표 달성한 경우 바로 판매 (타입별 목표 기준)
+		if e.sessionProfile.Level >= currentTypeTarget {
 			if itemType == "special" {
-				fmt.Printf("✅ 목표 달성! 특수 아이템 [%s] +%d → 보관\n", e.sessionProfile.SwordName, e.sessionProfile.Level)
+				fmt.Printf("✅ 목표 달성! 특수 아이템 [%s] +%d (목표 +%d) → 보관\n", e.sessionProfile.SwordName, e.sessionProfile.Level, specialTarget)
 				overlay.UpdateStatus("💰 골드 채굴\n✅ 특수 +%d 보관!", e.sessionProfile.Level)
 				e.telem.TrySend()
 				return // 특수 아이템은 판매하지 않음
 			}
 
-			fmt.Printf("✅ 이미 목표 달성! 현재 +%d → 바로 판매\n", e.sessionProfile.Level)
+			fmt.Printf("✅ 이미 목표 달성! 현재 +%d (목표 +%d) → 바로 판매\n", e.sessionProfile.Level, normalTarget)
 			overlay.UpdateStatus("💰 골드 채굴\n✅ 이미 +%d 보유!\n💵 판매 진행", e.sessionProfile.Level)
+			// 판매 통계용 레벨 저장
+			immediateSaleLevel := e.sessionProfile.Level
 			e.sendCommand("/판매")
 			saleText := e.readChatTextWaitForChange(5 * time.Second)
 			saleResult := ExtractSaleResult(saleText)
 			if saleResult != nil && saleResult.SaleGold > 0 {
 				e.totalGold += saleResult.SaleGold
 				fmt.Printf("💰 판매 완료: +%sG\n", FormatGold(saleResult.SaleGold))
+				// 판매 통계 기록 (타입+레벨별)
+				e.telem.RecordSaleWithType(itemType, immediateSaleLevel, saleResult.SaleGold)
 			}
 		}
 	}
@@ -953,12 +993,20 @@ func (e *Engine) loopGoldMine() {
 	}
 
 	// 세션 시작 시 이미 보유한 검이 있고, 목표 미달이면 바로 강화 이어가기
-	if e.sessionProfile != nil && e.sessionProfile.Level > 0 && !e.IsTargetReached(e.sessionProfile.Level) {
-		pendingExistingSword.name = e.sessionProfile.SwordName
-		pendingExistingSword.itemType = DetermineItemType(e.sessionProfile.SwordName)
-		pendingExistingSword.level = e.sessionProfile.Level
-		pendingExistingSword.valid = true
-		fmt.Printf("📋 기존 검 +%d 보유 중 → 목표 +%d까지 강화 이어가기\n", e.sessionProfile.Level, e.targetLevel)
+	if e.sessionProfile != nil && e.sessionProfile.Level > 0 {
+		existingType := DetermineItemType(e.sessionProfile.SwordName)
+		existingTarget := normalTarget
+		if existingType == "special" {
+			existingTarget = specialTarget
+		}
+		// 목표 미달인 경우에만 강화 이어가기
+		if e.sessionProfile.Level < existingTarget {
+			pendingExistingSword.name = e.sessionProfile.SwordName
+			pendingExistingSword.itemType = existingType
+			pendingExistingSword.level = e.sessionProfile.Level
+			pendingExistingSword.valid = true
+			fmt.Printf("📋 기존 검 +%d 보유 중 → 목표 +%d까지 강화 이어가기\n", e.sessionProfile.Level, existingTarget)
+		}
 	}
 
 	for e.running {
@@ -1007,7 +1055,15 @@ func (e *Engine) loopGoldMine() {
 			fmt.Printf("🎉 특수 아이템 발견: %s +%d\n", itemName, itemLevel)
 		}
 
-		// 2. 목표 도달 확인 (공통 헬퍼 사용)
+		// 타입별 목표 레벨 결정
+		cycleTarget := normalTarget
+		if itemType == "special" {
+			cycleTarget = specialTarget
+		} else if itemType == "trash" {
+			cycleTarget = 0 // 쓰레기는 바로 판매
+		}
+
+		// 2. 목표 도달 확인 (타입별 목표 기준)
 		// 이미 목표 달성이면 강화 스킵하고 바로 판매
 		var finalLevel int
 		var enhanceCost int
@@ -1015,16 +1071,21 @@ func (e *Engine) loopGoldMine() {
 		// 강화 시작 전 골드 측정 (순수익 계산용)
 		goldBeforeEnhance := e.readCurrentGold()
 
-		if e.IsTargetReached(itemLevel) {
-			fmt.Printf("✅ 파밍에서 이미 목표 도달: %s +%d\n", itemName, itemLevel)
+		if itemLevel >= cycleTarget {
+			fmt.Printf("✅ 파밍에서 이미 목표 도달: %s +%d (목표 +%d)\n", itemName, itemLevel, cycleTarget)
 			finalLevel = itemLevel
 			enhanceCost = 0
 		} else {
-			// 3. 강화 (공통 헬퍼 사용 - 시작 레벨 전달)
+			// 3. 강화 (타입별 목표 레벨 임시 적용)
+			originalTarget := e.targetLevel
+			e.targetLevel = cycleTarget
+
 			overlay.UpdateStatus("💰 골드 채굴 #%d\n⚔️ 강화 중: %s +%d (%s)\n목표: +%d\n누적: %sG",
-				e.cycleCount, itemName, itemLevel, typeLabel, e.targetLevel, FormatGold(e.totalGold))
+				e.cycleCount, itemName, itemLevel, typeLabel, cycleTarget, FormatGold(e.totalGold))
 
 			result := e.EnhanceToTarget(itemName, itemLevel)
+			e.targetLevel = originalTarget // 원래 목표 레벨 복원
+
 			if !result.Success {
 				if result.Destroyed {
 					fmt.Printf("💥 강화 중 파괴: %s (최종 +%d)\n", itemName, result.FinalLevel)
@@ -1056,7 +1117,7 @@ func (e *Engine) loopGoldMine() {
 		goldBeforeSale := e.readCurrentGold()
 
 		overlay.UpdateStatus("💰 골드 채굴 #%d\n💵 판매 중: %s +%d\n누적: %sG\n\n📋 판단: +%d 달성 → 판매",
-			e.cycleCount, itemName, finalLevel, FormatGold(e.totalGold), e.targetLevel)
+			e.cycleCount, itemName, finalLevel, FormatGold(e.totalGold), cycleTarget)
 		e.sendCommand("/판매")
 
 		// 판매 응답 대기 및 골드 추출
@@ -1105,7 +1166,8 @@ func (e *Engine) loopGoldMine() {
 		e.totalGold += netProfit // 순수익으로 누적
 
 		// v3 텔레메트리 기록 (공통 헬퍼 사용) - 서버에는 판매 수익 보고
-		e.ReportGoldMineCycle(itemName, finalLevel, saleGold, currentGold, enhanceCost, cycleTime.Seconds())
+		// itemType으로 전달 (타입별 가격 통계: "normal_10", "special_10" 등)
+		e.ReportGoldMineCycle(itemType, finalLevel, saleGold, currentGold, enhanceCost, cycleTime.Seconds())
 
 		// 세션 통계 업데이트 - 순수익 기준
 		e.sessionStats.cycleTimeSum += cycleTime.Seconds()
@@ -1827,6 +1889,9 @@ func (e *Engine) enhanceToTargetWithLevel(swordName string) (int, bool) {
 			continue
 		}
 
+		// 타입 기반 강화 통계용 (normal/special/trash)
+		itemType := DetermineItemType(swordName)
+
 		switch state.LastResult {
 		case "success":
 			// 실제 게임 상태에서 레벨 읽기 (ResultLevel이 있으면 사용, 없으면 수동 증가)
@@ -1836,12 +1901,12 @@ func (e *Engine) enhanceToTargetWithLevel(swordName string) (int, bool) {
 				currentLevel++
 			}
 			fmt.Printf("  ✅ +%d 성공\n", currentLevel)
-			e.telem.RecordEnhanceWithSword(swordName, currentLevel-1, "success")
+			e.telem.RecordEnhanceWithType(itemType, currentLevel-1, "success")
 			e.sessionStats.enhanceSuccess++
 			overlay.UpdateStatus("⚔️ 강화 중\n+%d/%d\n\n📋 판단: 성공 → 계속", currentLevel, e.targetLevel)
 		case "destroy":
 			fmt.Println("  💥 파괴!")
-			e.telem.RecordEnhanceWithSword(swordName, currentLevel, "destroy")
+			e.telem.RecordEnhanceWithType(itemType, currentLevel, "destroy")
 			e.sessionStats.enhanceDestroy++
 			overlay.UpdateStatus("⚔️ 강화 중\n💥 파괴!\n\n📋 판단: 파괴 → 새 아이템")
 			return currentLevel, false
@@ -1851,7 +1916,7 @@ func (e *Engine) enhanceToTargetWithLevel(swordName string) (int, bool) {
 				currentLevel = state.ResultLevel
 			}
 			fmt.Printf("  ⏸️ +%d 유지\n", currentLevel)
-			e.telem.RecordEnhanceWithSword(swordName, currentLevel, "hold")
+			e.telem.RecordEnhanceWithType(itemType, currentLevel, "hold")
 			e.sessionStats.enhanceHold++
 			overlay.UpdateStatus("⚔️ 강화 중\n+%d/%d\n\n📋 판단: 유지 → 재시도", currentLevel, e.targetLevel)
 		}

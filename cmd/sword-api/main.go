@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -346,6 +348,31 @@ var defaultSwordPrices = []SwordPrice{
 	{Level: 15, MinPrice: 30000000, MaxPrice: 40000000, AvgPrice: 35000000},
 }
 
+// extractTypeLevel 키에서 타입과 레벨 추출
+// 키 형식: "{type}_{level}" (예: "normal_10", "special_5", "trash_3")
+// 반환: (타입, 레벨, 성공여부)
+func extractTypeLevel(key string) (string, int, bool) {
+	parts := strings.Split(key, "_")
+	if len(parts) < 2 {
+		return "", 0, false
+	}
+
+	// 마지막 부분이 레벨 숫자
+	levelStr := parts[len(parts)-1]
+	level, err := strconv.Atoi(levelStr)
+	if err != nil {
+		return "", 0, false
+	}
+
+	// 나머지가 타입 (normal, special, trash만 허용)
+	itemType := strings.Join(parts[:len(parts)-1], "_")
+	if itemType != "normal" && itemType != "special" && itemType != "trash" {
+		return "", 0, false
+	}
+
+	return itemType, level, true
+}
+
 func getGameData() GameData {
 	stats.mu.RLock()
 	defer stats.mu.RUnlock()
@@ -383,9 +410,49 @@ func getGameData() GameData {
 		}
 	}
 
+	// 검 가격: 실측 판매 데이터 반영
+	swordPrices := make([]SwordPrice, len(defaultSwordPrices))
+	copy(swordPrices, defaultSwordPrices)
+
+	// swordSaleStats에서 레벨별 판매 통계 집계
+	// 키 형식: "{검이름}_{레벨}" (예: "불꽃검_10", "검_8")
+	levelSales := make(map[int]struct {
+		totalPrice int
+		count      int
+	})
+	for key, stat := range stats.swordSaleStats {
+		// 키에서 레벨 추출 (마지막 "_" 뒤의 숫자)
+		parts := strings.Split(key, "_")
+		if len(parts) < 2 {
+			continue
+		}
+		levelStr := parts[len(parts)-1]
+		level, err := strconv.Atoi(levelStr)
+		if err != nil {
+			continue
+		}
+		// 레벨별로 집계
+		entry := levelSales[level]
+		entry.totalPrice += stat.TotalPrice
+		entry.count += stat.Count
+		levelSales[level] = entry
+	}
+
+	// 실측 평균 가격으로 대체 (minSampleSize 이상일 때만)
+	for i := range swordPrices {
+		lvl := swordPrices[i].Level
+		if entry, ok := levelSales[lvl]; ok && entry.count >= minSampleSize {
+			realAvgPrice := entry.totalPrice / entry.count
+			swordPrices[i].AvgPrice = realAvgPrice
+			// MinPrice, MaxPrice도 실측 기준으로 추정 (±20%)
+			swordPrices[i].MinPrice = int(float64(realAvgPrice) * 0.8)
+			swordPrices[i].MaxPrice = int(float64(realAvgPrice) * 1.2)
+		}
+	}
+
 	return GameData{
 		EnhanceRates:  enhanceRates,
-		SwordPrices:   defaultSwordPrices,
+		SwordPrices:   swordPrices,
 		BattleRewards: battleRewards,
 		UpdatedAt:     time.Now().Format(time.RFC3339),
 	}
@@ -920,12 +987,41 @@ func handleOptimalSellPoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 예상 시간 계산 (초 단위)
-	// 파밍 시간 + 강화 시간
-	// 파밍: 약 3초, 강화: 약 2초/회
+	// 실제 클라이언트 설정 기반:
+	// - TrashDelay: 1.2초 (파밍/판매 후)
+	// - LowDelay: 1.5초 (0-8강)
+	// - MidDelay: 2.5초 (9강)
+	// - HighDelay: 3.5초 (10강+)
+	// + 응답 대기/처리 오버헤드: 약 1초
 	calcExpectedTime := func(targetLevel int) float64 {
-		farmTime := 3.0                                   // 아이템 파밍
-		enhanceTime := calcExpectedTrials(targetLevel) * 2.0 // 강화당 2초
-		return farmTime + enhanceTime
+		const (
+			farmTime     = 1.2 // TrashDelay (판매 후 새 검 받기)
+			lowDelay     = 2.5 // LowDelay(1.5) + 응답대기(1.0)
+			midDelay     = 3.5 // MidDelay(2.5) + 응답대기(1.0)
+			highDelay    = 4.5 // HighDelay(3.5) + 응답대기(1.0)
+			slowdownLvl  = 9   // SlowdownLevel
+		)
+
+		totalTime := farmTime
+		for lvl := 0; lvl < targetLevel && lvl < len(gameData.EnhanceRates); lvl++ {
+			rate := gameData.EnhanceRates[lvl].SuccessRate / 100.0
+			if rate <= 0 {
+				continue
+			}
+			expectedTries := 1.0 / rate
+
+			// 레벨별 딜레이 적용
+			var delay float64
+			if lvl >= 10 {
+				delay = highDelay
+			} else if lvl >= slowdownLvl {
+				delay = midDelay
+			} else {
+				delay = lowDelay
+			}
+			totalTime += expectedTries * delay
+		}
+		return totalTime
 	}
 
 	type LevelEfficiency struct {
@@ -984,10 +1080,181 @@ func handleOptimalSellPoint(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 타입별 판매가 집계 (normal_10, special_10 등에서 추출)
+	typeLevelPrices := make(map[string]map[int]struct {
+		totalPrice int
+		count      int
+	})
+	for key, stat := range stats.swordSaleStats {
+		itemType, level, ok := extractTypeLevel(key)
+		if !ok {
+			continue
+		}
+		if typeLevelPrices[itemType] == nil {
+			typeLevelPrices[itemType] = make(map[int]struct {
+				totalPrice int
+				count      int
+			})
+		}
+		entry := typeLevelPrices[itemType][level]
+		entry.totalPrice += stat.TotalPrice
+		entry.count += stat.Count
+		typeLevelPrices[itemType][level] = entry
+	}
+
+	// 타입별 강화 확률 집계 (normal_10, special_10 등에서 추출)
+	typeLevelEnhance := make(map[string]map[int]struct {
+		attempts int
+		success  int
+	})
+	for key, stat := range stats.swordEnhanceStats {
+		itemType, level, ok := extractTypeLevel(key)
+		if !ok {
+			continue
+		}
+		if typeLevelEnhance[itemType] == nil {
+			typeLevelEnhance[itemType] = make(map[int]struct {
+				attempts int
+				success  int
+			})
+		}
+		entry := typeLevelEnhance[itemType][level]
+		entry.attempts += stat.Attempts
+		entry.success += stat.Success
+		typeLevelEnhance[itemType][level] = entry
+	}
+
+	// 타입별 강화 성공률 계산 (샘플 부족 시 기본값 사용)
+	getEnhanceRateForType := func(itemType string, level int) float64 {
+		if typeData, ok := typeLevelEnhance[itemType]; ok {
+			if entry, ok := typeData[level]; ok && entry.attempts >= minSampleSize {
+				return float64(entry.success) / float64(entry.attempts)
+			}
+		}
+		// 기본값 사용
+		if level < len(gameData.EnhanceRates) {
+			return gameData.EnhanceRates[level].SuccessRate / 100.0
+		}
+		return 0.05 // 매우 낮은 기본값
+	}
+
+	// 타입별 평균 판매가 계산 (샘플 부족 시 기본값 사용)
+	getAvgPriceForType := func(itemType string, level int) int {
+		if typeData, ok := typeLevelPrices[itemType]; ok {
+			if entry, ok := typeData[level]; ok && entry.count >= minSampleSize {
+				return entry.totalPrice / entry.count
+			}
+		}
+		// 기본값 사용
+		if level < len(gameData.SwordPrices) {
+			return gameData.SwordPrices[level].AvgPrice
+		}
+		return 0
+	}
+
+	// 타입별 예상 시간 계산
+	calcExpectedTimeForType := func(itemType string, targetLevel int) float64 {
+		const (
+			farmTime    = 1.2
+			lowDelay    = 2.5
+			midDelay    = 3.5
+			highDelay   = 4.5
+			slowdownLvl = 9
+		)
+
+		totalTime := farmTime
+		for lvl := 0; lvl < targetLevel; lvl++ {
+			rate := getEnhanceRateForType(itemType, lvl)
+			if rate <= 0 {
+				continue
+			}
+			expectedTries := 1.0 / rate
+
+			var delay float64
+			if lvl >= 10 {
+				delay = highDelay
+			} else if lvl >= slowdownLvl {
+				delay = midDelay
+			} else {
+				delay = lowDelay
+			}
+			totalTime += expectedTries * delay
+		}
+		return totalTime
+	}
+
+	// 타입별 최적 레벨 계산
+	type TypeOptimal struct {
+		Type           string  `json:"type"`
+		OptimalLevel   int     `json:"optimal_level"`
+		OptimalGPM     float64 `json:"optimal_gpm"`
+		SampleSize     int     `json:"sample_size"`
+		EnhanceSamples int     `json:"enhance_samples"`
+		IsDefault      bool    `json:"is_default"`
+	}
+
+	calcTypeOptimal := func(itemType string) TypeOptimal {
+		bestLvl := 10
+		bestGpm := 0.0
+		totalSales := 0
+		totalEnhance := 0
+
+		// 해당 타입의 총 샘플 수 계산
+		if typeData, ok := typeLevelPrices[itemType]; ok {
+			for _, entry := range typeData {
+				totalSales += entry.count
+			}
+		}
+		if typeData, ok := typeLevelEnhance[itemType]; ok {
+			for _, entry := range typeData {
+				totalEnhance += entry.attempts
+			}
+		}
+
+		isDefault := totalSales < minSampleSize || totalEnhance < minSampleSize
+
+		for level := 5; level <= 15; level++ {
+			price := getAvgPriceForType(itemType, level)
+			timeSeconds := calcExpectedTimeForType(itemType, level)
+
+			// 성공 확률 계산
+			successProb := 1.0
+			for lvl := 0; lvl < level; lvl++ {
+				successProb *= getEnhanceRateForType(itemType, lvl)
+			}
+
+			gpm := 0.0
+			if timeSeconds > 0 {
+				gpm = (float64(price) * successProb) / (timeSeconds / 60.0)
+			}
+
+			if gpm > bestGpm {
+				bestGpm = gpm
+				bestLvl = level
+			}
+		}
+
+		return TypeOptimal{
+			Type:           itemType,
+			OptimalLevel:   bestLvl,
+			OptimalGPM:     bestGpm,
+			SampleSize:     totalSales,
+			EnhanceSamples: totalEnhance,
+			IsDefault:      isDefault,
+		}
+	}
+
+	typeOptimalLevels := map[string]TypeOptimal{
+		"normal":  calcTypeOptimal("normal"),
+		"special": calcTypeOptimal("special"),
+		"trash":   calcTypeOptimal("trash"),
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"optimal_level":      bestLevel,
 		"optimal_gpm":        bestGPM,
 		"level_efficiencies": efficiencies,
+		"by_type":            typeOptimalLevels,
 		"note":               "gold_per_minute = (avg_price × success_prob) / (expected_time / 60)",
 	})
 }

@@ -70,12 +70,23 @@ type LevelEfficiency struct {
 	Recommendation     string  `json:"recommendation"`
 }
 
+// TypeOptimal 타입별 최적 판매 데이터
+type TypeOptimal struct {
+	Type           string  `json:"type"`
+	OptimalLevel   int     `json:"optimal_level"`
+	OptimalGPM     float64 `json:"optimal_gpm"`
+	SampleSize     int     `json:"sample_size"`
+	EnhanceSamples int     `json:"enhance_samples"`
+	IsDefault      bool    `json:"is_default"`
+}
+
 // OptimalSellData 최적 판매 시점 데이터
 type OptimalSellData struct {
-	OptimalLevel      int               `json:"optimal_level"`
-	OptimalGPM        float64           `json:"optimal_gpm"`
-	LevelEfficiencies []LevelEfficiency `json:"level_efficiencies"`
-	Note              string            `json:"note"`
+	OptimalLevel      int                    `json:"optimal_level"`
+	OptimalGPM        float64                `json:"optimal_gpm"`
+	LevelEfficiencies []LevelEfficiency      `json:"level_efficiencies"`
+	ByType            map[string]TypeOptimal `json:"by_type"` // 타입별 최적 레벨
+	Note              string                 `json:"note"`
 }
 
 
@@ -370,6 +381,57 @@ func GetAllLevelEfficiencies() []LevelEfficiency {
 		return nil
 	}
 	return data.LevelEfficiencies
+}
+
+// GetOptimalLevelByType 타입별 최적 판매 레벨 조회
+// itemType: "normal", "special", "trash"
+// 반환: (최적 레벨, 기본값 사용 여부)
+func GetOptimalLevelByType(itemType string) (int, bool) {
+	data, err := FetchOptimalSellData()
+	if err != nil || data == nil || data.ByType == nil {
+		return getDefaultOptimalLevel(itemType), true
+	}
+
+	if typeData, ok := data.ByType[itemType]; ok {
+		return typeData.OptimalLevel, typeData.IsDefault
+	}
+
+	return getDefaultOptimalLevel(itemType), true
+}
+
+// GetOptimalLevelsByType 모든 타입의 최적 판매 레벨 조회
+// 반환: map[타입]최적레벨 (예: {"normal": 10, "special": 12})
+func GetOptimalLevelsByType() map[string]int {
+	result := map[string]int{
+		"normal":  10,
+		"special": 10,
+		"trash":   0,
+	}
+
+	data, err := FetchOptimalSellData()
+	if err != nil || data == nil || data.ByType == nil {
+		return result
+	}
+
+	for itemType, typeData := range data.ByType {
+		if typeData.OptimalLevel > 0 {
+			result[itemType] = typeData.OptimalLevel
+		}
+	}
+
+	return result
+}
+
+// getDefaultOptimalLevel 타입별 기본 최적 레벨
+func getDefaultOptimalLevel(itemType string) int {
+	switch itemType {
+	case "trash":
+		return 0 // 쓰레기는 강화 안함
+	case "special":
+		return 10 // 특수 아이템 기본값
+	default:
+		return 10 // 일반 아이템 기본값
+	}
 }
 
 // FormatGold 골드를 정확한 콤마 표기로 포맷 (예: 184,331,258)

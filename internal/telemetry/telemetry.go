@@ -515,8 +515,78 @@ func (t *Telemetry) RecordFarmingWithItem(itemName string, itemType string) {
 	}
 }
 
-// RecordSaleWithSword 검 종류 포함 판매 기록
-func (t *Telemetry) RecordSaleWithSword(swordName string, level int, price int) {
+// RecordEnhanceWithType 아이템 타입+레벨별 강화 기록
+// itemType: "normal", "special", "trash"
+// level: 현재 강화 레벨 (강화 전 레벨)
+// result: "success", "fail"/"hold", "destroy"
+func (t *Telemetry) RecordEnhanceWithType(itemType string, level int, result string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.enabled {
+		return
+	}
+
+	// 기존 강화 통계 업데이트
+	t.stats.EnhanceAttempts++
+
+	switch result {
+	case "success":
+		t.stats.EnhanceSuccess++
+		if t.stats.EnhanceByLevel == nil {
+			t.stats.EnhanceByLevel = make(map[int]int)
+		}
+		t.stats.EnhanceByLevel[level]++
+	case "fail", "hold":
+		t.stats.EnhanceFail++
+	case "destroy":
+		t.stats.EnhanceDestroy++
+	}
+
+	// 레벨별 강화 상세 통계 (v3)
+	if t.stats.EnhanceLevelDetail == nil {
+		t.stats.EnhanceLevelDetail = make(map[int]*EnhanceLevelStat)
+	}
+	if t.stats.EnhanceLevelDetail[level] == nil {
+		t.stats.EnhanceLevelDetail[level] = &EnhanceLevelStat{}
+	}
+	lvlStat := t.stats.EnhanceLevelDetail[level]
+	lvlStat.Attempts++
+	switch result {
+	case "success":
+		lvlStat.Success++
+	case "fail", "hold":
+		lvlStat.Fail++
+	case "destroy":
+		lvlStat.Destroy++
+	}
+
+	// 타입+레벨별 강화 통계 (v3)
+	// 키 형식: "{type}_{level}" (예: "normal_10", "special_10")
+	if itemType != "" {
+		if t.stats.SwordEnhanceStats == nil {
+			t.stats.SwordEnhanceStats = make(map[string]*SwordEnhanceStat)
+		}
+		key := fmt.Sprintf("%s_%d", itemType, level)
+		if t.stats.SwordEnhanceStats[key] == nil {
+			t.stats.SwordEnhanceStats[key] = &SwordEnhanceStat{}
+		}
+		stat := t.stats.SwordEnhanceStats[key]
+		stat.Attempts++
+
+		switch result {
+		case "success":
+			stat.Success++
+		case "fail", "hold":
+			stat.Fail++
+		case "destroy":
+			stat.Destroy++
+		}
+	}
+}
+
+// RecordSaleWithType 아이템 타입+레벨별 판매 기록
+// itemType: "normal", "special", "trash"
+func (t *Telemetry) RecordSaleWithType(itemType string, level int, price int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.enabled {
@@ -530,12 +600,13 @@ func (t *Telemetry) RecordSaleWithSword(swordName string, level int, price int) 
 		t.stats.SalesMaxPrice = price
 	}
 
-	// 검+레벨별 판매 통계 (v2)
-	if swordName != "" {
+	// 타입+레벨별 판매 통계 (v3)
+	// 키 형식: "{type}_{level}" (예: "normal_10", "special_10")
+	if itemType != "" {
 		if t.stats.SwordSaleStats == nil {
 			t.stats.SwordSaleStats = make(map[string]*SwordSaleStat)
 		}
-		key := fmt.Sprintf("%s_%d", swordName, level)
+		key := fmt.Sprintf("%s_%d", itemType, level)
 		if t.stats.SwordSaleStats[key] == nil {
 			t.stats.SwordSaleStats[key] = &SwordSaleStat{}
 		}
