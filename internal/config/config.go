@@ -22,14 +22,9 @@ type Config struct {
 	HighDelay     float64 `json:"high_delay"`
 	SlowdownLevel int     `json:"slowdown_level"`
 
-	// 게임 설정
-	GoldMineTarget int `json:"gold_mine_target"`
-	MinGold        int `json:"min_gold"`
-
 	// 배틀 설정
-	BattleLevelDiff int     `json:"battle_level_diff"` // 역배 레벨 차이 (1-3)
+	BattleLevelDiff int     `json:"battle_level_diff"` // 역배 레벨 차이 (1-20)
 	BattleCooldown  float64 `json:"battle_cooldown"`   // 배틀 간 쿨다운 (초)
-	BattleMinGold   int     `json:"battle_min_gold"`   // 최소 보유 골드 (이하면 중단)
 
 	// 클립보드 텍스트 읽기
 	ChatOffsetY int `json:"chat_offset_y"` // 입력창에서 채팅 영역까지 거리 (픽셀)
@@ -52,11 +47,8 @@ func Default() *Config {
 		MidDelay:        2.5,
 		HighDelay:       3.5,
 		SlowdownLevel:   9,
-		GoldMineTarget:  10,
-		MinGold:         0,
 		BattleLevelDiff: 2,
 		BattleCooldown:  5.0,
-		BattleMinGold:   1000,
 		ChatOffsetY:     40, // 입력창 클릭 좌표에서 40픽셀 위 (채팅 영역 클릭용)
 		// 오버레이 기본값
 		OverlayChatWidth:   380,

@@ -934,13 +934,19 @@ func (e *Engine) loopSpecial() {
 					overlay.UpdateStatus("⭐ 특수 강화 완료!\n[%s] +%d", itemName, result.FinalLevel)
 					e.telem.TrySend()
 					return // 목표 달성 → 종료
-				} else {
+				} else if result.Destroyed {
 					// 파괴됨 → 다시 특수 아이템 찾기
 					fmt.Printf("💥 강화 중 파괴됨 (최종 레벨: +%d) → 다시 특수 아이템 찾기\n", result.FinalLevel)
 					overlay.UpdateStatus("💥 특수 파괴됨\n다시 특수 찾는 중...")
 					e.telem.TrySend()
 					time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
 					continue // 루프 계속 → 특수 아이템 다시 찾기
+				} else {
+					// 골드 부족 또는 사용자 중지 → 종료 (무한 루프 방지)
+					fmt.Printf("⚠️ 강화 중단됨 (레벨: +%d) → 종료\n", result.FinalLevel)
+					overlay.UpdateStatus("⚠️ 강화 중단\n[%s] +%d", itemName, result.FinalLevel)
+					e.telem.TrySend()
+					return
 				}
 			} else {
 				// 강화 목표 없으면 (보관만) 바로 종료
@@ -954,14 +960,23 @@ func (e *Engine) loopSpecial() {
 		// 4. 쓰레기/일반/미판별이면 /판매로 새 아이템 받기 (v3 변경점)
 		// "none"도 포함: 타입 판별 실패 시 계속 강화하면 안되므로 판매 처리
 		if state.ItemType == "trash" || state.ItemType == "normal" || state.ItemType == "unknown" || state.ItemType == "none" {
+			// 현재 레벨 추출
+			saleLevel := e.ExtractCurrentLevel(state)
+
+			// 레벨 0은 판매 불가 → /강화 재시도 필요
+			if saleLevel == 0 {
+				fmt.Printf("  ⚠️ +0 상태 → 판매 불가, 강화 재시도\n")
+				overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n⚠️ +0 판매 불가\n강화 재시도...")
+				time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
+				continue
+			}
+
 			e.telem.RecordFarmingWithItem(itemName, state.ItemType)
 			e.sessionStats.trashCount++
 			displayName := itemName
 			if displayName == "" {
 				displayName = GetItemTypeLabel(state.ItemType)
 			}
-			// 현재 레벨 추출 (판매 통계용)
-			saleLevel := e.ExtractCurrentLevel(state)
 			overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n쓰레기: %d회\n🗑️ %s\n\n📋 판단: %s → 판매", e.sessionStats.trashCount, displayName, GetItemTypeLabel(state.ItemType))
 			fmt.Printf("  🗑️ [%s] → /판매\n", displayName)
 
@@ -978,10 +993,19 @@ func (e *Engine) loopSpecial() {
 		}
 
 		// 5. 예상치 못한 타입 - 안전하게 판매 처리 (무한 강화 방지)
-		fmt.Printf("  ❓ 예상치 못한 아이템 타입: [%s] - 판매 처리\n", state.ItemType)
-		overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n❓ 타입 불명 → 판매")
 		// 현재 레벨 추출 (판매 통계용)
 		unknownSaleLevel := e.ExtractCurrentLevel(state)
+
+		// 레벨 0은 판매 불가 → /강화 재시도 필요
+		if unknownSaleLevel == 0 {
+			fmt.Printf("  ⚠️ +0 상태 → 판매 불가, 강화 재시도\n")
+			overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n⚠️ +0 판매 불가\n강화 재시도...")
+			time.Sleep(time.Duration(e.cfg.TrashDelay * float64(time.Second)))
+			continue
+		}
+
+		fmt.Printf("  ❓ 예상치 못한 아이템 타입: [%s] - 판매 처리\n", state.ItemType)
+		overlay.UpdateStatus("⭐ 특수 아이템 뽑기\n❓ 타입 불명 → 판매")
 		e.sendCommand("/판매")
 		// 판매 응답 대기
 		unknownSaleText := e.readChatTextWaitForChange(5 * time.Second)
@@ -2158,10 +2182,8 @@ func (e *Engine) showSettings(reader *bufio.Reader) {
 		fmt.Printf("2. 중간 속도: %.1f초\n", e.cfg.MidDelay)
 		fmt.Printf("3. 고강 속도: %.1f초\n", e.cfg.HighDelay)
 		fmt.Printf("4. 좌표 고정: %v\n", e.cfg.LockXY)
-		fmt.Printf("5. 골드 채굴 목표: +%d\n", e.cfg.GoldMineTarget)
-		fmt.Printf("6. 배틀 역배 레벨차: %d\n", e.cfg.BattleLevelDiff)
-		fmt.Printf("7. 배틀 쿨다운: %.1f초\n", e.cfg.BattleCooldown)
-		fmt.Printf("8. 배틀 최소 골드: %dG\n", e.cfg.BattleMinGold)
+		fmt.Printf("5. 배틀 역배 레벨차: %d\n", e.cfg.BattleLevelDiff)
+		fmt.Printf("6. 배틀 쿨다운: %.1f초\n", e.cfg.BattleCooldown)
 		fmt.Println("0. 돌아가기")
 		fmt.Print("선택: ")
 
@@ -2191,28 +2213,16 @@ func (e *Engine) showSettings(reader *bufio.Reader) {
 			e.cfg.LockXY = !e.cfg.LockXY
 			fmt.Printf("좌표 고정: %v\n", e.cfg.LockXY)
 		case "5":
-			fmt.Print("골드 채굴 목표 레벨 (1-20): ")
-			val, _ := reader.ReadString('\n')
-			if v, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && v >= 1 && v <= 20 {
-				e.cfg.GoldMineTarget = v
-			}
-		case "6":
 			fmt.Print("배틀 역배 레벨차 (1-20): ")
 			val, _ := reader.ReadString('\n')
 			if v, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && v >= 1 && v <= 20 {
 				e.cfg.BattleLevelDiff = v
 			}
-		case "7":
+		case "6":
 			fmt.Print("배틀 쿨다운 (초): ")
 			val, _ := reader.ReadString('\n')
 			if v, err := strconv.ParseFloat(strings.TrimSpace(val), 64); err == nil && v > 0 {
 				e.cfg.BattleCooldown = v
-			}
-		case "8":
-			fmt.Print("배틀 최소 골드: ")
-			val, _ := reader.ReadString('\n')
-			if v, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && v >= 0 {
-				e.cfg.BattleMinGold = v
 			}
 		case "0":
 			e.cfg.Save()
@@ -2315,13 +2325,31 @@ func (e *Engine) showMyProfile() {
 	fmt.Println()
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
+	// 아이템 타입 분석
+	itemType := "normal"
+	if profile.SwordName != "" {
+		itemType = DetermineItemType(profile.SwordName)
+	}
+	itemTypeKr := map[string]string{"normal": "일반", "special": "특수", "trash": "쓰레기"}[itemType]
+	if itemTypeKr == "" {
+		itemTypeKr = "일반"
+	}
+
 	// 1. 내 검 정보
 	fmt.Println("⚔️ 내 검 정보")
 	fmt.Printf("   이름: %s\n", profile.Name)
 	if profile.SwordName != "" {
-		fmt.Printf("   보유 검: [+%d] %s\n", profile.Level, profile.SwordName)
+		fmt.Printf("   보유 검: [+%d] %s (%s)\n", profile.Level, profile.SwordName, itemTypeKr)
 	} else {
 		fmt.Printf("   보유 검: +%d\n", profile.Level)
+	}
+	// 최고 기록 표시
+	if profile.BestLevel > 0 {
+		if profile.BestSword != "" {
+			fmt.Printf("   최고 기록: [+%d] %s\n", profile.BestLevel, profile.BestSword)
+		} else {
+			fmt.Printf("   최고 기록: +%d\n", profile.BestLevel)
+		}
 	}
 	fmt.Printf("   전적: %d승 %d패\n", profile.Wins, profile.Losses)
 	if profile.Gold > 0 {
@@ -2333,22 +2361,56 @@ func (e *Engine) showMyProfile() {
 	fmt.Println("💰 예상 판매가")
 	price := GetSwordPrice(profile.Level)
 	if price != nil {
-		fmt.Printf("   최소: %sG\n", FormatGold(price.MinPrice))
-		fmt.Printf("   평균: %sG\n", FormatGold(price.AvgPrice))
-		fmt.Printf("   최대: %sG\n", FormatGold(price.MaxPrice))
+		fmt.Printf("   현재 +%d강: %sG (최소 %sG ~ 최대 %sG)\n",
+			profile.Level, FormatGold(price.AvgPrice), FormatGold(price.MinPrice), FormatGold(price.MaxPrice))
 	} else {
 		fmt.Println("   데이터 없음")
 	}
 	fmt.Println()
 
-	// 3. 강화 확률표
+	// 3. 최적 판매 추천 (서버 API 활용)
+	fmt.Println("🎯 최적 판매 추천")
+	optimalLevel, optSource := GetOptimalSellLevel(profile.Gold)
+	fmt.Printf("   전체 최적: +%d강 (%s)\n", optimalLevel, optSource)
+
+	// 타입별 최적 레벨
+	typeOptLevel, isDefault := GetOptimalLevelByType(itemType)
+	if isDefault {
+		fmt.Printf("   %s 검 최적: +%d강 (기본값)\n", itemTypeKr, typeOptLevel)
+	} else {
+		fmt.Printf("   %s 검 최적: +%d강 (실측 데이터)\n", itemTypeKr, typeOptLevel)
+	}
+
+	// 현재 레벨과 최적 레벨 비교 추천
+	if profile.Level < typeOptLevel {
+		nextPrice := GetSwordPrice(typeOptLevel)
+		if nextPrice != nil && price != nil {
+			profit := nextPrice.AvgPrice - price.AvgPrice
+			fmt.Printf("   💡 +%d강까지 강화 추천 (예상 추가 수익: +%sG)\n", typeOptLevel, FormatGold(profit))
+		} else {
+			fmt.Printf("   💡 +%d강까지 강화 추천\n", typeOptLevel)
+		}
+	} else if profile.Level == typeOptLevel {
+		fmt.Println("   ✅ 현재 최적 판매 레벨입니다!")
+	} else {
+		fmt.Printf("   ⚠️ 최적 레벨(+%d) 초과 - 리스크 관리 필요\n", typeOptLevel)
+	}
+	fmt.Println()
+
+	// 4. 레벨별 효율 분석 (GPM 테이블)
+	PrintLevelEfficiencyTable(profile.Level, itemType)
+
+	// 5. 강화 확률표
 	PrintEnhanceRateTable(profile.Level)
 
-	// 4. 목표별 성공 확률
+	// 6. 목표별 성공 확률
 	PrintTargetSuccessChance(profile.Level)
 
-	// 5. 역배 기대값
+	// 7. 역배 기대값
 	PrintUpsetAnalysis(profile.Level, profile.Gold)
+
+	// 8. 추천 액션 요약
+	PrintRecommendedActions(profile.Level, profile.Gold, itemType, typeOptLevel)
 
 	fmt.Println()
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

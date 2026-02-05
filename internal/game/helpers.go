@@ -447,6 +447,148 @@ func PrintUpsetAnalysis(level, gold int) {
 	fmt.Printf("   💡 배팅 기준: %sG (보유 골드의 10%%)\n", FormatGold(betAmount))
 }
 
+// PrintLevelEfficiencyTable 레벨별 효율 분석 테이블 출력 (GPM 포함)
+// currentLevel: 현재 레벨, itemType: 아이템 타입 ("normal", "special", "trash")
+func PrintLevelEfficiencyTable(currentLevel int, itemType string) {
+	fmt.Println("📈 레벨별 효율 분석 (GPM = 분당 골드)")
+
+	// 타입별 효율 데이터 조회
+	typeEffs := GetLevelEfficienciesByType(itemType)
+	if typeEffs == nil || len(typeEffs) == 0 {
+		// 타입별 데이터 없으면 전체 데이터 사용
+		allEffs := GetAllLevelEfficiencies()
+		if allEffs == nil || len(allEffs) == 0 {
+			fmt.Println("   데이터 없음 (서버 연결 확인)")
+			fmt.Println()
+			return
+		}
+
+		fmt.Println("   레벨 | 성공확률 | 평균 판매가 |   GPM   | 추천")
+		fmt.Println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+		for _, eff := range allEffs {
+			marker := "  "
+			if eff.Level == currentLevel {
+				marker = "▶ "
+			}
+			recommend := ""
+			if eff.Recommendation == "optimal" {
+				recommend = "⭐ 최적"
+			}
+			fmt.Printf("   %s+%2d |  %5.2f%% | %10sG | %7.1f | %s\n",
+				marker, eff.Level, eff.SuccessProb, FormatGold(eff.AvgPrice), eff.GoldPerMinute, recommend)
+		}
+	} else {
+		// 타입별 데이터 출력 (샘플 수 포함)
+		fmt.Println("   레벨 | 성공확률 | 평균 판매가 |   GPM   | 샘플 | 추천")
+		fmt.Println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+		for _, eff := range typeEffs {
+			marker := "  "
+			if eff.Level == currentLevel {
+				marker = "▶ "
+			}
+			recommend := ""
+			if eff.Recommendation == "optimal" {
+				recommend = "⭐ 최적"
+			}
+			sampleStr := fmt.Sprintf("%4d", eff.SampleSize)
+			if eff.SampleSize < 10 {
+				sampleStr = fmt.Sprintf("%4d⚠", eff.SampleSize) // 샘플 적음 경고
+			}
+			fmt.Printf("   %s+%2d |  %5.2f%% | %10sG | %7.1f | %s | %s\n",
+				marker, eff.Level, eff.SuccessProb, FormatGold(eff.AvgPrice), eff.GoldPerMinute, sampleStr, recommend)
+		}
+	}
+	fmt.Println()
+}
+
+// PrintRecommendedActions 추천 액션 요약 출력
+// level: 현재 레벨, gold: 보유 골드, itemType: 아이템 타입, optimalLevel: 최적 판매 레벨
+func PrintRecommendedActions(level, gold int, itemType string, optimalLevel int) {
+	fmt.Println("🎯 추천 액션")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	itemTypeKr := map[string]string{"normal": "일반", "special": "특수", "trash": "쓰레기"}[itemType]
+	if itemTypeKr == "" {
+		itemTypeKr = "일반"
+	}
+
+	currentPrice := GetSwordPrice(level)
+	optimalPrice := GetSwordPrice(optimalLevel)
+	currentPriceVal := 0
+	if currentPrice != nil {
+		currentPriceVal = currentPrice.AvgPrice
+	}
+
+	actionNum := 1
+
+	// 1. 강화 추천 여부
+	if level < optimalLevel {
+		successChance := CalcEnhanceSuccessChance(level, optimalLevel)
+		trials := CalcExpectedTrials(level, optimalLevel)
+		expectedProfit := 0
+		if optimalPrice != nil {
+			expectedProfit = optimalPrice.AvgPrice - currentPriceVal
+		}
+		fmt.Printf("%d. [강화 추천] +%d강 → +%d강\n", actionNum, level, optimalLevel)
+		fmt.Printf("   └─ 성공률 %.2f%%, 평균 %.0f회 시도\n", successChance, trials)
+		if expectedProfit > 0 {
+			fmt.Printf("   └─ 성공 시 추가 수익: +%sG\n", FormatGold(expectedProfit))
+		}
+		actionNum++
+	} else if level == optimalLevel {
+		fmt.Printf("%d. [판매 추천] 현재 +%d강 = 최적 판매 레벨\n", actionNum, level)
+		fmt.Printf("   └─ 예상 판매가: %sG\n", FormatGold(currentPriceVal))
+		actionNum++
+	} else {
+		// 최적 레벨 초과
+		fmt.Printf("%d. [판매 권장] 최적 레벨(+%d) 초과, 리스크 관리 필요\n", actionNum, optimalLevel)
+		fmt.Printf("   └─ 현재 판매가: %sG (고점 판매 고려)\n", FormatGold(currentPriceVal))
+		actionNum++
+	}
+
+	// 2. 배틀 추천 여부
+	if gold >= 100 && level > 0 {
+		// 역배 기대값 계산 (레벨차 1~2)
+		betAmount := gold / 10
+		if betAmount < 100 {
+			betAmount = 100
+		}
+		bestDiff := 0
+		bestEV := float64(-9999)
+		for diff := 1; diff <= 2; diff++ {
+			ev, _, _ := CalcUpsetExpectedValue(level, level+diff, betAmount)
+			if ev > bestEV {
+				bestEV = ev
+				bestDiff = diff
+			}
+		}
+		if bestEV > 0 {
+			_, winRate, avgReward := CalcUpsetExpectedValue(level, level+bestDiff, betAmount)
+			fmt.Printf("%d. [배틀 추천] 역배 +%d (상대 +%d강)\n", actionNum, bestDiff, level+bestDiff)
+			fmt.Printf("   └─ 승률 %.0f%%, 보상 %sG, 기대값 +%.0fG\n", winRate, FormatGold(avgReward), bestEV)
+			actionNum++
+		} else if gold >= 500 {
+			fmt.Printf("%d. [배틀 가능] 역배 기대값 음수 - 신중하게 판단\n", actionNum)
+			actionNum++
+		}
+	}
+
+	// 3. 특수 아이템인 경우 보관 추천
+	if itemType == "special" {
+		fmt.Printf("%d. [보관 추천] 특수 아이템 - 판매보다 보관 고려\n", actionNum)
+		actionNum++
+	}
+
+	// 4. 골드 부족 경고
+	if gold < 100 && gold >= 0 {
+		fmt.Printf("%d. [주의] 골드 부족 (%sG) - 강화/배틀 제한됨\n", actionNum, FormatGold(gold))
+	}
+
+	fmt.Println()
+}
+
 // =============================================================================
 // 배틀 관련 헬퍼
 // =============================================================================
