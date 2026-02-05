@@ -327,12 +327,21 @@ func (e *Engine) runGoldMineMode() {
 			targetLevel = typeOptimal
 		}
 
-		// 효율성 정보 표시
-		if eff := GetLevelEfficiency(targetLevel); eff != nil {
-			fmt.Printf("✅ 설정 완료: %s +%d (예상 %.0f G/분)\n", GetItemTypeLabel(itemType), targetLevel, eff.GoldPerMinute)
-		} else {
-			fmt.Printf("✅ 설정 완료: %s +%d\n", GetItemTypeLabel(itemType), targetLevel)
+		// 효율성 정보 표시 (타입별 효율 데이터 우선 사용 - 위에서 이미 가져온 typeEffs 재사용)
+		var gpmStr string
+		for _, eff := range typeEffs {
+			if eff.Level == targetLevel {
+				gpmStr = fmt.Sprintf(" (예상 %.0f G/분)", eff.GoldPerMinute)
+				break
+			}
 		}
+		// 타입별 데이터 없으면 전체 데이터 사용
+		if gpmStr == "" {
+			if eff := GetLevelEfficiency(targetLevel); eff != nil {
+				gpmStr = fmt.Sprintf(" (예상 %.0f G/분)", eff.GoldPerMinute)
+			}
+		}
+		fmt.Printf("✅ 설정 완료: %s +%d%s\n", GetItemTypeLabel(itemType), targetLevel, gpmStr)
 	}
 
 	// 모든 아이템 타입에 동일한 목표 레벨 적용
