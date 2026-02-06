@@ -1626,6 +1626,14 @@ func (e *Engine) readChatClipboard() string {
 	// 채팅 영역에서 텍스트 읽기 (전체선택 → 복사 → 클립보드)
 	text := input.ReadChatText(chatClickX, chatClickY, inputX, inputY)
 
+	// 클립보드 잔여물 감지: sendCommand의 TypeText가 Cmd+V용으로 클립보드에
+	// 명령어 텍스트("/강화", "/판매" 등)를 남김. ReadChatText의 Cmd+A→Cmd+C가
+	// 간헐적으로 실패하면 이전 명령어가 클립보드에 남아있게 됨.
+	// 실제 카카오톡 채팅 텍스트는 날짜 헤더("2026년 X월 X일") + 메시지로 항상 50자 이상.
+	if text != "" && len(text) < 50 {
+		return ""
+	}
+
 	if text == "" {
 		fmt.Println("  ⚠️ 클립보드 텍스트 비어있음")
 	}
