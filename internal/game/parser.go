@@ -1072,14 +1072,14 @@ func (e *MonitorEvent) Hash() string {
 
 // 모니터링용 정규식 패턴
 var (
-	// 강화 결과 패턴: "+N → +M" 또는 "+N -> +M"
-	monitorEnhancePattern = regexp.MustCompile(`\+(\d+)\s*[→\->]+\s*\+(\d+)`)
+	// 강화 결과 패턴: "+N → +M" 또는 "+N -> +M" (→는 Unicode라 alternation 사용)
+	monitorEnhancePattern = regexp.MustCompile(`\+(\d+)\s*(?:→|->)\s*\+(\d+)`)
 	// 강화 성공 패턴 (더 넓은 범위)
-	monitorSuccessPattern = regexp.MustCompile(`(?:강화.*성공|레벨.*상승|성공.*강화)`)
+	monitorSuccessPattern = regexp.MustCompile(`(?:강화.*성공|레벨.*상승|성공.*강화|강화 성공)`)
 	// 강화 파괴 패턴
-	monitorDestroyPattern = regexp.MustCompile(`(?:파괴|부서|사라)`)
+	monitorDestroyPattern = regexp.MustCompile(`(?:강화 파괴|파괴|부서|사라)`)
 	// 강화 유지 패턴
-	monitorHoldPattern = regexp.MustCompile(`(?:유지|실패.*유지|레벨.*유지)`)
+	monitorHoldPattern = regexp.MustCompile(`(?:강화 유지|유지|실패.*유지|레벨.*유지)`)
 	// 배틀 중계 패턴: "〖🎙️ 배틀 중계〗" 감지
 	monitorBattleHeaderPattern = regexp.MustCompile(`배틀\s*중계`)
 	// 배틀 참가자 패턴: "@유저 『[+N] 검이름』" 또는 "『[+N] 검이름』" (유저명 없을 수 있음)
@@ -1091,11 +1091,13 @@ var (
 	// 판매 결과 패턴 (더 넓은 범위)
 	monitorSaleGoldPattern = regexp.MustCompile(`획득\s*골드[:\s]*\+?(\d{1,3}(?:,\d{3})*)\s*G`)
 	// 판매 태그 패턴
-	monitorSaleTagPattern = regexp.MustCompile(`\[판매\]`)
+	monitorSaleTagPattern = regexp.MustCompile(`검\s*판매`)
+	// 판매 레벨 추출 패턴: '[+N] 검이름' 형식에서 레벨 추출
+	monitorSaleLevelPattern = regexp.MustCompile(`'\[\+(\d+)\]\s*[^']+`)
 	// 특수 아이템 발견 패턴 (더 넓은 범위)
 	monitorSpecialPattern = regexp.MustCompile(`(?:특수|히든|hidden|레어|희귀).*?『([^』]+)』`)
-	// 게임 봇 메시지 감지 패턴
-	gameBotIndicators = regexp.MustCompile(`(?:━━|──|\[강화\]|\[배틀\]|\[판매\]|\[프로필\]|\[랭킹\]|⚔️|💰|💵|💶|📊)`)
+	// 게임 봇 메시지 감지 패턴 (〖〗 추가, ✨💥💦 추가)
+	gameBotIndicators = regexp.MustCompile(`(?:━━|──|〖|〗|\[강화\]|\[배틀\]|\[판매\]|\[프로필\]|\[랭킹\]|⚔️|💰|💵|💶|📊|✨|💥|💦)`)
 )
 
 // IsGameBotMessage 게임 봇 메시지인지 확인
@@ -1274,8 +1276,14 @@ func parseMonitorBlock(text string) *MonitorEvent {
 			evt.GoldEarned, _ = strconv.Atoi(goldStr)
 		}
 
-		// 레벨 및 아이템 정보
-		evt.Level = ExtractLevel(text)
+		// 레벨 추출 (판매 메시지에서 '[+N] 검이름' 형식)
+		if matches := monitorSaleLevelPattern.FindStringSubmatch(text); len(matches) > 1 {
+			evt.Level, _ = strconv.Atoi(matches[1])
+		} else {
+			evt.Level = ExtractLevel(text)
+		}
+
+		// 아이템 정보
 		evt.ItemName = ExtractItemName(text)
 		if evt.ItemName != "" {
 			evt.ItemType = DetermineItemType(evt.ItemName)

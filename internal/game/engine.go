@@ -1107,7 +1107,8 @@ func (e *Engine) loopGoldMine() {
 		}
 
 		// 이미 목표 달성한 경우 바로 판매 (타입별 목표 기준)
-		if e.sessionProfile.Level >= currentTypeTarget {
+		// 0강은 판매 불가이므로 1 이상일 때만 판매
+		if e.sessionProfile.Level >= currentTypeTarget && e.sessionProfile.Level > 0 {
 			if itemType == "special" {
 				fmt.Printf("✅ 목표 달성! 특수 아이템 [%s] +%d (목표 +%d) → 보관\n", e.sessionProfile.SwordName, e.sessionProfile.Level, specialTarget)
 				overlay.UpdateStatus("💰 골드 채굴\n✅ 특수 +%d 보관!", e.sessionProfile.Level)
@@ -1216,6 +1217,11 @@ func (e *Engine) loopGoldMine() {
 			cycleTarget = specialTarget
 		} else if itemType == "trash" {
 			cycleTarget = trashTarget // 쓰레기 목표 (0이면 바로 판매)
+		}
+
+		// 0강은 게임에서 판매 불가 → 최소 1강까지 강화 필요
+		if cycleTarget < 1 {
+			cycleTarget = 1
 		}
 
 		// 2. 목표 도달 확인 (타입별 목표 기준)
@@ -2541,8 +2547,17 @@ func (e *Engine) loopMonitor() {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
+	// F9 체크용 (200ms마다)
+	checkTicker := time.NewTicker(200 * time.Millisecond)
+	defer checkTicker.Stop()
+
 	for e.running {
 		select {
+		case <-checkTicker.C:
+			if e.checkStop() {
+				return
+			}
+			continue
 		case <-ticker.C:
 			// 채팅 텍스트 읽기
 			currentText := e.readChatClipboard()
