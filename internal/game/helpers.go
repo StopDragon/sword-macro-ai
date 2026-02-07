@@ -3,6 +3,8 @@ package game
 import (
 	"fmt"
 	"time"
+
+	"github.com/StopDragon/sword-macro-ai/internal/logger"
 )
 
 // =============================================================================
@@ -89,11 +91,12 @@ func (e *Engine) LogProfileStatus(profile ProfileCheckResult, modePrefix string)
 
 // EnhanceResult 강화 진행 결과
 type EnhanceResult struct {
-	FinalLevel   int
-	Success      bool   // 목표 도달 여부
-	Destroyed    bool   // 파괴 여부
-	NewSwordName string // 파괴 시 새로 받은 검 이름
-	NewSwordType string // 파괴 시 새로 받은 검 타입
+	FinalLevel          int
+	Success             bool   // 목표 도달 여부
+	Destroyed           bool   // 파괴 여부
+	NewSwordName        string // 파괴 시 새로 받은 검 이름
+	NewSwordType        string // 파괴 시 새로 받은 검 타입
+	MaxConsecutiveFails int    // 이 강화의 최대 연속 실패(유지) 횟수
 }
 
 // EnhanceToTarget 목표 레벨까지 강화 진행 (시작 레벨 지정 가능)
@@ -103,9 +106,13 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 	// 타입 기반 강화 통계용 (normal/special/trash)
 	itemType := DetermineItemType(itemName)
 
+	// 연속 실패 추적 (로컬)
+	consecutiveFails := 0
+	maxConsecutiveFails := 0
+
 	for currentLevel < e.targetLevel && e.running {
 		if e.checkStop() {
-			return EnhanceResult{FinalLevel: currentLevel, Success: false, Destroyed: false}
+			return EnhanceResult{FinalLevel: currentLevel, Success: false, Destroyed: false, MaxConsecutiveFails: maxConsecutiveFails}
 		}
 
 		// 강화 시도
@@ -132,8 +139,9 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 		if state.LastResult == "destroy" {
 			// 타입+레벨별 강화 통계 기록
 			e.telem.RecordEnhanceWithType(itemType, currentLevel, "destroy")
+			e.enhanceConsecutiveFails = 0
 
-			result := EnhanceResult{FinalLevel: currentLevel, Success: false, Destroyed: true}
+			result := EnhanceResult{FinalLevel: currentLevel, Success: false, Destroyed: true, MaxConsecutiveFails: maxConsecutiveFails}
 
 			// 파괴 시 새 검 정보 추출
 			// 1순위: 파괴 전용 패턴 "『[+0] 낡은 검』 지급되었습니다"
@@ -156,7 +164,10 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 		// 핵심: ResultLevel("+X → +Y" 패턴에서 추출)이 가장 정확함
 
 		if state.LastResult == "success" {
+			consecutiveFails = 0
+			e.enhanceConsecutiveFails = 0
 			// 강화 성공 - ResultLevel 우선 사용 (가장 정확함)
+			prevLevel := currentLevel
 			if state.ResultLevel > 0 {
 				currentLevel = state.ResultLevel
 				fmt.Printf("  ⚔️ 강화 성공! +%d 도달\n", currentLevel)
@@ -165,16 +176,30 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 				currentLevel++
 				fmt.Printf("  ⚔️ 강화 성공! +%d 도달 (계산값)\n", currentLevel)
 			}
+			// 이중 강화 감지: 레벨이 2 이상 점프하면 의심스러움
+			if currentLevel > prevLevel+1 {
+				logger.Error("의심스러운 레벨 점프 (EnhanceToTarget): +%d → +%d (예상: +%d)", prevLevel, currentLevel, prevLevel+1)
+			}
 			// 타입+레벨별 강화 통계 기록 (강화 전 레벨 기준)
 			e.telem.RecordEnhanceWithType(itemType, currentLevel-1, "success")
 		} else if state.LastResult == "hold" {
+			consecutiveFails++
+			e.enhanceConsecutiveFails = consecutiveFails
+			if consecutiveFails > maxConsecutiveFails {
+				maxConsecutiveFails = consecutiveFails
+			}
 			// 유지 시에도 ResultLevel 확인 (현재 레벨 동기화)
 			// 채팅에 성공(+9→+10)과 유지(+10)가 동시에 잡힐 때
 			// LastResult="hold"가 되지만 ResultLevel은 정확히 10을 가리킴
 			if state.ResultLevel > 0 && state.ResultLevel != currentLevel {
 				currentLevel = state.ResultLevel
 			}
-			fmt.Printf("  💫 강화 유지 (현재 +%d)\n", currentLevel)
+			// 연속 실패 경고
+			if e.cfg.ConsecutiveFailWarn > 0 && consecutiveFails >= e.cfg.ConsecutiveFailWarn {
+				fmt.Printf("  ⚠️ +%d 유지 (연속 %d회!)\n", currentLevel, consecutiveFails)
+			} else {
+				fmt.Printf("  💫 강화 유지 (현재 +%d)\n", currentLevel)
+			}
 			// 타입+레벨별 강화 통계 기록
 			e.telem.RecordEnhanceWithType(itemType, currentLevel, "hold")
 		} else if state.LastResult == "destroy" {
@@ -193,7 +218,7 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 		if goldInfo.IsInsufficient {
 			fmt.Printf("⚠️ 골드 부족! 필요: %s, 보유: %s\n",
 				FormatGold(goldInfo.RequiredGold), FormatGold(goldInfo.RemainingGold))
-			return EnhanceResult{FinalLevel: currentLevel, Success: false, Destroyed: false}
+			return EnhanceResult{FinalLevel: currentLevel, Success: false, Destroyed: false, MaxConsecutiveFails: maxConsecutiveFails}
 		}
 
 	}
@@ -206,9 +231,10 @@ func (e *Engine) EnhanceToTarget(itemName string, startLevel int) EnhanceResult 
 	}
 
 	return EnhanceResult{
-		FinalLevel: currentLevel,
-		Success:    currentLevel >= e.targetLevel,
-		Destroyed:  false,
+		FinalLevel:          currentLevel,
+		Success:             currentLevel >= e.targetLevel,
+		Destroyed:           false,
+		MaxConsecutiveFails: maxConsecutiveFails,
 	}
 }
 

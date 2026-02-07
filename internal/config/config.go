@@ -34,6 +34,9 @@ type Config struct {
 	OverlayChatHeight int `json:"overlay_chat_height"` // 채팅 영역 높이
 	OverlayInputWidth int `json:"overlay_input_width"` // 입력 영역 너비
 	OverlayInputHeight int `json:"overlay_input_height"` // 입력 영역 높이
+
+	// 연속 실패 경고 임계값 (hold 연속 N회 시 경고, 기본 5)
+	ConsecutiveFailWarn int `json:"consecutive_fail_warn"`
 }
 
 // Default 기본 설정 반환
@@ -55,6 +58,8 @@ func Default() *Config {
 		OverlayChatHeight:  430,
 		OverlayInputWidth:  380,
 		OverlayInputHeight: 50,
+		// 연속 실패 경고
+		ConsecutiveFailWarn: 5,
 	}
 }
 

@@ -55,7 +55,7 @@ void ShowOCRRegion(int x, int y, int width, int height) {
         contentView.wantsLayer = YES;
         contentView.layer.borderColor = [[NSColor redColor] CGColor];
         contentView.layer.borderWidth = 3.0;
-        contentView.layer.backgroundColor = [[NSColor colorWithRed:1.0 green:0.0 blue:0.0 alpha:0.1] CGColor];
+        contentView.layer.backgroundColor = [[NSColor clearColor] CGColor];
 
         [ocrWindow setContentView:contentView];
         [ocrWindow orderFrontRegardless];
@@ -88,7 +88,7 @@ void ShowInputRegion(int x, int y, int width, int height) {
         contentView.wantsLayer = YES;
         contentView.layer.borderColor = [[NSColor greenColor] CGColor];
         contentView.layer.borderWidth = 3.0;
-        contentView.layer.backgroundColor = [[NSColor colorWithRed:0.0 green:1.0 blue:0.0 alpha:0.1] CGColor];
+        contentView.layer.backgroundColor = [[NSColor clearColor] CGColor];
 
         [inputWindow setContentView:contentView];
         [inputWindow orderFrontRegardless];

@@ -65,6 +65,9 @@ type Engine struct {
 	// 이전 RAW 텍스트 (응답 변경 감지용)
 	lastRawChatText string
 
+	// 연속 실패 추적 (getDelayForLevel 공유용)
+	enhanceConsecutiveFails int // 현재 강화 루프의 연속 실패 횟수
+
 	// 세션 통계 (종료 시 출력용)
 	sessionStats struct {
 		startGold       int
@@ -76,6 +79,8 @@ type Engine struct {
 		enhanceDestroy  int
 		cycleTimeSum    float64 // 사이클 시간 합계 (초)
 		cycleGoldSum    int     // 사이클 수익 합계
+		consecutiveFails    int // 현재 연속 실패(유지) 횟수
+		maxConsecutiveFails int // 세션 최대 연속 실패 횟수
 	}
 }
 
@@ -653,6 +658,9 @@ func (e *Engine) printSessionStats() {
 		fmt.Printf("  ✅ 강화 성공:   %d회\n", e.sessionStats.enhanceSuccess)
 		fmt.Printf("  ⏸️  강화 유지:   %d회\n", e.sessionStats.enhanceHold)
 		fmt.Printf("  💥 강화 파괴:   %d회\n", e.sessionStats.enhanceDestroy)
+		if e.sessionStats.maxConsecutiveFails > 0 {
+			fmt.Printf("  🔥 최대 연속유지: %d회\n", e.sessionStats.maxConsecutiveFails)
+		}
 	}
 
 	// 배틀 통계
@@ -791,6 +799,8 @@ func (e *Engine) loopEnhance() {
 		switch state.LastResult {
 		case "destroy":
 			e.sessionStats.enhanceDestroy++
+			e.sessionStats.consecutiveFails = 0
+			e.enhanceConsecutiveFails = 0
 			e.telem.RecordEnhanceWithType(itemType, currentLevel, "destroy")
 			fmt.Printf("  💥 +%d에서 파괴!\n", currentLevel)
 			overlay.UpdateStatus("⚔️ 강화 중\n💥 +%d 파괴!\n\n📋 판단: 새 검으로 재시작", currentLevel)
@@ -805,10 +815,17 @@ func (e *Engine) loopEnhance() {
 
 		case "success":
 			e.sessionStats.enhanceSuccess++
+			e.sessionStats.consecutiveFails = 0
+			e.enhanceConsecutiveFails = 0
+			prevLevel := currentLevel
 			if state.ResultLevel > 0 {
 				currentLevel = state.ResultLevel
 			} else {
 				currentLevel++
+			}
+			// 이중 강화 감지: 레벨이 2 이상 점프하면 의심스러움
+			if currentLevel > prevLevel+1 {
+				logger.Error("의심스러운 레벨 점프: +%d → +%d (예상: +%d)", prevLevel, currentLevel, prevLevel+1)
 			}
 			e.telem.RecordEnhanceWithType(itemType, currentLevel-1, "success")
 			fmt.Printf("  ⚔️ 강화 성공! +%d\n", currentLevel)
@@ -816,11 +833,23 @@ func (e *Engine) loopEnhance() {
 
 		case "hold":
 			e.sessionStats.enhanceHold++
+			e.sessionStats.consecutiveFails++
+			e.enhanceConsecutiveFails = e.sessionStats.consecutiveFails
+			if e.sessionStats.consecutiveFails > e.sessionStats.maxConsecutiveFails {
+				e.sessionStats.maxConsecutiveFails = e.sessionStats.consecutiveFails
+			}
 			if state.ResultLevel > 0 && state.ResultLevel != currentLevel {
 				currentLevel = state.ResultLevel
 			}
 			e.telem.RecordEnhanceWithType(itemType, currentLevel, "hold")
-			fmt.Printf("  💫 +%d 유지\n", currentLevel)
+			// 연속 실패 경고
+			if e.cfg.ConsecutiveFailWarn > 0 && e.sessionStats.consecutiveFails >= e.cfg.ConsecutiveFailWarn {
+				fmt.Printf("  ⚠️ +%d 유지 (연속 %d회!)\n", currentLevel, e.sessionStats.consecutiveFails)
+				overlay.UpdateStatus("⚔️ 강화 중\n⚠️ 연속 유지 %d회!\n+%d → +%d",
+					e.sessionStats.consecutiveFails, currentLevel, e.targetLevel)
+			} else {
+				fmt.Printf("  💫 +%d 유지\n", currentLevel)
+			}
 
 		default:
 			// 결과 불명확 — ResultLevel로 동기화 시도
@@ -1626,6 +1655,10 @@ func (e *Engine) readChatClipboard() string {
 	// 채팅 영역에서 텍스트 읽기 (전체선택 → 복사 → 클립보드)
 	text := input.ReadChatText(chatClickX, chatClickY, inputX, inputY)
 
+	// 클립보드 잔여물 근본 제거: ReadChatText 후 클립보드를 비워서
+	// 다음 Cmd+C 실패 시 이전 텍스트(명령어)가 남아있지 않도록 함
+	input.ClearClipboard()
+
 	// 클립보드 잔여물 감지: sendCommand의 TypeText가 Cmd+V용으로 클립보드에
 	// 명령어 텍스트("/강화", "/판매" 등)를 남김. ReadChatText의 Cmd+A→Cmd+C가
 	// 간헐적으로 실패하면 이전 명령어가 클립보드에 남아있게 됨.
@@ -2142,6 +2175,16 @@ func (e *Engine) getDelayForLevel(level int) time.Duration {
 	default:
 		delay = e.cfg.HighDelay
 	}
+
+	// 연속 실패 시 딜레이 증가 (5회 이상부터 10%씩, 최대 50%)
+	if e.enhanceConsecutiveFails >= 5 {
+		mult := 1.0 + float64(e.enhanceConsecutiveFails-4)*0.1
+		if mult > 1.5 {
+			mult = 1.5
+		}
+		delay *= mult
+	}
+
 	return time.Duration(delay * float64(time.Second))
 }
 
