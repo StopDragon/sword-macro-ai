@@ -1655,10 +1655,6 @@ func (e *Engine) readChatClipboard() string {
 	// 채팅 영역에서 텍스트 읽기 (전체선택 → 복사 → 클립보드)
 	text := input.ReadChatText(chatClickX, chatClickY, inputX, inputY)
 
-	// 클립보드 잔여물 근본 제거: ReadChatText 후 클립보드를 비워서
-	// 다음 Cmd+C 실패 시 이전 텍스트(명령어)가 남아있지 않도록 함
-	input.ClearClipboard()
-
 	// 클립보드 잔여물 감지: sendCommand의 TypeText가 Cmd+V용으로 클립보드에
 	// 명령어 텍스트("/강화", "/판매" 등)를 남김. ReadChatText의 Cmd+A→Cmd+C가
 	// 간헐적으로 실패하면 이전 명령어가 클립보드에 남아있게 됨.
