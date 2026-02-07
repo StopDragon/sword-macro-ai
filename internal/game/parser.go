@@ -1111,29 +1111,34 @@ func IsGameBotMessage(text string) bool {
 }
 
 // ParseMonitorEvents 텍스트에서 모니터링 이벤트 파싱
+// chatTimestampPattern 채팅 타임스탬프 패턴: "HH:MM 이름" 형식
+var chatTimestampPattern = regexp.MustCompile(`^\d{2}:\d{2}\s+\S+`)
+
 func ParseMonitorEvents(text string) []MonitorEvent {
 	var events []MonitorEvent
 
 	lines := strings.Split(text, "\n")
 
-	// 블록 단위로 분석 (여러 줄이 하나의 이벤트)
-	// 빈 줄 또는 구분자로 블록 분리
+	// 타임스탬프("HH:MM 이름") 기준으로 블록 분리
+	// 타임스탬프 없는 줄(빈 줄, [⚔️전투], [🏆결과] 등)은 이전 메시지의 연속
 	var currentBlock []string
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "━") || strings.HasPrefix(line, "─") {
-			// 블록 종료 - 분석
+		trimmed := strings.TrimSpace(line)
+		if chatTimestampPattern.MatchString(trimmed) {
+			// 새 타임스탬프 → 이전 블록 마감
 			if len(currentBlock) > 0 {
 				blockText := strings.Join(currentBlock, "\n")
 				if evt := parseMonitorBlock(blockText); evt != nil {
 					events = append(events, *evt)
 				}
-				currentBlock = nil
 			}
-			continue
+			currentBlock = []string{trimmed}
+		} else if trimmed != "" {
+			// 타임스탬프 없는 줄 → 이전 블록에 병합
+			currentBlock = append(currentBlock, trimmed)
 		}
-		currentBlock = append(currentBlock, line)
+		// 빈 줄은 무시 (블록 분리 안 함)
 	}
 
 	// 마지막 블록 처리
@@ -1227,7 +1232,7 @@ func parseMonitorBlock(text string) *MonitorEvent {
 			if matches := monitorBattleWinnerPattern.FindStringSubmatch(text); len(matches) > 1 {
 				for i := 1; i < len(matches); i++ {
 					if matches[i] != "" {
-						evt.Winner = matches[i]
+						evt.Winner = strings.TrimSuffix(matches[i], "님")
 						winnerFound = true
 						break
 					}
